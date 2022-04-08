@@ -1,0 +1,575 @@
+
+-------------------------- BÁSICO DO SELLER  -------------------------- 
+
+-- restricoes de micro sellers
+create multiset volatile table lista_inicial, no log as
+  (
+  select
+    cus_cust_id_sel cust_id,
+    sit_site_id,
+    cast(cus_ru_fixed_sel as date) fecha_regi,
+    sum(bpp_cashout_final) cashout,
+    sum(gmv_usd) gmv
+  from SCORING.fraud_main
+  where cast(cus_ru_fixed_sel as date) >= current_date - interval '6' month
+    and sit_site_id in ('MLA','MLB','MLC','MCO', 'MLM')
+  group by 1,2,3
+  having gmv <= 10000
+    and gmv >= 100
+  )
+with data primary index (cust_id) on commit preserve rows;
+
+
+-- ter tido vendas
+create multiset volatile table gmv_recente, no log as
+  (
+  select
+    cus_cust_id_sel cust_id,
+    sum(gmv_usd) gmv
+  from SCORING.fraud_main
+  where tim_day_winning_date >= current_date - interval '1' month
+    and sit_site_id in ('MLA','MLB','MLC','MCO', 'MLM')
+  group by 1
+  having gmv >= 100
+  )
+with data primary index (cust_id) on commit preserve rows;
+
+
+
+-------------------------- ITENS -------------------------- 
+
+-- pxq
+create multiset volatile table pxq_semanal, no log as 
+  (
+  SELECT distinct
+    qa.cust cust_id,
+    zeroifnull(qa.pxq) pxq_s1,
+    zeroifnull(qb.pxq) pxq_s2,
+    zeroifnull(qc.pxq) pxq_s3,
+    zeroifnull(qd.pxq) pxq_s4,
+    (case when qa.pxq > 0 then 1 else 0 end) publicou_s1,
+    (case when qb.pxq > 0 then 1 else 0 end) publicou_s2,
+    (case when qc.pxq > 0 then 1 else 0 end) publicou_s3,
+    (case when qd.pxq > 0 then 1 else 0 end) publicou_s4
+  FROM
+    (
+    select
+      cus_cust_id_sel cust,
+      sum(case when ite_auction_start_datetime between current_date - interval '7' day and current_date - interval '1' day then ite_quantity_total*ite_base_current_price else 0 end) pxq
+    from WHOWNER.LK_ITE_ITEMS_PH
+    group by 1
+    ) qa
+  LEFT JOIN
+    (
+    select
+      cus_cust_id_sel cust,
+      sum(case when ite_auction_start_datetime between current_date - interval '14' day and current_date - interval '8' day then ite_quantity_total*ite_base_current_price else 0 end) pxq
+    from WHOWNER.LK_ITE_ITEMS_PH
+    group by 1
+    ) qb
+    ON qa.cust = qb.cust
+  LEFT JOIN
+    (
+    select
+      cus_cust_id_sel cust,
+      sum(case when ite_auction_start_datetime between current_date - interval '21' day and current_date - interval '15' day then ite_quantity_total*ite_base_current_price else 0 end) pxq
+    from WHOWNER.LK_ITE_ITEMS_PH
+    group by 1
+    ) qc
+    ON qa.cust = qc.cust
+  LEFT JOIN
+    (
+    select
+      cus_cust_id_sel cust,
+      sum(case when ite_auction_start_datetime between current_date - interval '28' day and current_date - interval '22' day then ite_quantity_total*ite_base_current_price else 0 end) pxq
+    from WHOWNER.LK_ITE_ITEMS_PH
+    group by 1
+    ) qd
+    ON qa.cust = qd.cust
+  ) 
+with data primary index (cust_id) on commit preserve rows;
+
+
+-- asp
+create multiset volatile table asp_semanal, no log as 
+  (
+  SELECT distinct
+    qa.cust cust_id,
+    zeroifnull(qa.asp) asp_s1,
+    zeroifnull(qb.asp) asp_s2,
+    zeroifnull(qc.asp) asp_s3,
+    zeroifnull(qd.asp) asp_s4
+  FROM
+    (
+    select
+      cus_cust_id_sel cust,
+      round(avg(case when ite_auction_start_datetime between current_date - interval '7' day and current_date - interval '1' day then ite_base_current_price else 0 end),2) asp
+    from WHOWNER.LK_ITE_ITEMS_PH
+    group by 1
+    ) qa
+  LEFT JOIN
+    (
+    select
+      cus_cust_id_sel cust,
+      round(avg(case when ite_auction_start_datetime between current_date - interval '14' day and current_date - interval '8' day then ite_base_current_price else 0 end),2) asp
+    from WHOWNER.LK_ITE_ITEMS_PH
+    group by 1
+    ) qb
+    ON qa.cust = qb.cust
+  LEFT JOIN
+    (
+    select
+      cus_cust_id_sel cust,
+      round(avg(case when ite_auction_start_datetime between current_date - interval '21' day and current_date - interval '15' day then ite_base_current_price else 0 end),2) asp
+    from WHOWNER.LK_ITE_ITEMS_PH
+    group by 1
+    ) qc
+    ON qa.cust = qc.cust
+  LEFT JOIN
+    (
+    select
+      cus_cust_id_sel cust,
+      round(avg(case when ite_auction_start_datetime between current_date - interval '28' day and current_date - interval '22' day then ite_base_current_price else 0 end),2) asp
+    from WHOWNER.LK_ITE_ITEMS_PH
+    group by 1
+    ) qd
+    ON qa.cust = qd.cust
+  ) 
+with data primary index (cust_id) on commit preserve rows;
+
+
+-- itens eletronics e apparel
+create multiset volatile table verticais, no log as 
+  (
+  SELECT
+    a.cust cust_id,
+    1.00*round(a.qtdd_eletro/c.qtdd_itens,2) ratio_eletro,
+    1.00*round(b.qtdd_apparel/c.qtdd_itens,2) ratio_apparel
+  FROM
+    (
+    select
+      cus_cust_id_sel cust,
+      count(distinct ite_item_id) qtdd_eletro
+    from SCORING.fraud_main
+    where vertical = 'consumer_electronics'
+      and tim_day_winning_date >= current_date- interval '28' day
+    group by 1
+    ) a
+  LEFT JOIN
+    (
+    select
+      cus_cust_id_sel cust,
+      count(distinct ite_item_id) qtdd_apparel
+    from SCORING.fraud_main
+    where vertical = 'apparel'
+      and tim_day_winning_date >= current_date- interval '28' day
+    group by 1
+    ) b
+    ON a.cust = b.cust
+  LEFT JOIN
+    (
+    select
+      cus_cust_id_sel cust,
+      count(distinct ite_item_id) qtdd_itens
+    from SCORING.fraud_main
+    where tim_day_winning_date >= current_date- interval '28' day
+    group by 1
+    ) c
+    ON a.cust = c.cust
+  )
+with data primary index (cust_id) on commit preserve rows;
+
+
+
+-------------------------- OFERTAS -------------------------- 
+
+-- gmv
+create multiset volatile table gmv_semanal, no log as 
+  (
+  SELECT distinct
+    qa.cust cust_id,
+    zeroifnull(qa.gmv) gmv_s1,
+    zeroifnull(qb.gmv) gmv_s2,
+    zeroifnull(qc.gmv) gmv_s3,
+    zeroifnull(qd.gmv) gmv_s4,
+    (case when qa.gmv > 0 then 1 else 0 end) vendeu_s1,
+    (case when qb.gmv > 0 then 1 else 0 end) vendeu_s2,
+    (case when qc.gmv > 0 then 1 else 0 end) vendeu_s3,
+    (case when qd.gmv > 0 then 1 else 0 end) vendeu_s4
+  FROM
+    (
+    select
+      cus_cust_id_sel cust,
+      sum(case when tim_day_winning_date between current_date - interval '7' day and current_date - interval '1' day then gmv_usd else 0 end) gmv
+    from SCORING.fraud_main
+    group by 1
+    ) qa
+  LEFT JOIN
+    (
+    select
+      cus_cust_id_sel cust,
+      sum(case when tim_day_winning_date between current_date - interval '14' day and current_date - interval '8' day then gmv_usd else 0 end) gmv
+    from SCORING.fraud_main
+    group by 1
+    ) qb
+    ON qa.cust = qb.cust
+  LEFT JOIN
+    (
+    select
+      cus_cust_id_sel cust,
+      sum(case when tim_day_winning_date between current_date - interval '21' day and current_date - interval '9' day then gmv_usd else 0 end) gmv
+    from SCORING.fraud_main
+    group by 1
+    ) qc
+    ON qa.cust = qc.cust
+  LEFT JOIN
+    (
+    select
+      cus_cust_id_sel cust,
+      sum(case when tim_day_winning_date between current_date - interval '28' day and current_date - interval '22' day then gmv_usd else 0 end) gmv
+    from SCORING.fraud_main
+    group by 1
+    ) qd
+    ON qa.cust = qd.cust
+  ) 
+with data primary index (cust_id) on commit preserve rows;
+
+
+
+-------------------------- ADELANTOS -------------------------- 
+
+-- has adtos hoje
+create multiset volatile table has_mia, no log as 
+  (
+  select
+    mia.cus_cust_id cust_id,
+    mia.group_allowed_advance_days mia_days,
+    (case when mia.status='allowed' then 1 else 0 end) has_mia
+  from whowner.lk_mp_mia_user_hist mia
+  qualify 1 = row_number() over (partition by cus_cust_id order by last_update_date desc)
+  ) 
+with data primary index (cust_id) on commit preserve rows;
+
+
+-- monto adtos
+create multiset volatile table adto_semanal, no log as 
+  (
+  SELECT distinct
+    qa.cust cust_id,
+    zeroifnull(qa.adto) adto_s1,
+    zeroifnull(qb.adto) adto_s2,
+    zeroifnull(qc.adto) adto_s3,
+    zeroifnull(qd.adto) adto_s4,
+    (case when qa.adto > 0 then 1 else 0 end) adtou_s1,
+    (case when qb.adto > 0 then 1 else 0 end) adtou_s2,
+    (case when qc.adto > 0 then 1 else 0 end) adtou_s3,
+    (case when qd.adto > 0 then 1 else 0 end) adtou_s4
+  FROM
+    (
+    select
+      cus_cust_id cust,
+      sum(case when cast(mia_creation_datetime as date) between current_date - interval '7' day and current_date - interval '1' day then mia_total_amt_inusd else 0 end) adto
+    from WHOWNER.BT_MP_MIA
+    where mia_status_id = 'DONE'
+    group by 1
+    ) qa
+  LEFT JOIN
+    (
+    select
+      cus_cust_id cust,
+      sum(case when cast(mia_creation_datetime as date) between current_date - interval '14' day and current_date - interval '8' day then mia_total_amt_inusd else 0 end) adto
+    from WHOWNER.BT_MP_MIA
+    where mia_status_id = 'DONE'
+    group by 1
+    ) qb
+    ON qa.cust = qb.cust
+  LEFT JOIN
+    (
+    select
+      cus_cust_id cust,
+      sum(case when cast(mia_creation_datetime as date) between current_date - interval '21' day and current_date - interval '15' day then mia_total_amt_inusd else 0 end) adto
+    from WHOWNER.BT_MP_MIA
+    where mia_status_id = 'DONE'
+    group by 1
+    ) qc
+    ON qa.cust = qc.cust
+  LEFT JOIN
+    (
+    select
+      cus_cust_id cust,
+      sum(case when cast(mia_creation_datetime as date) between current_date - interval '28' day and current_date - interval '22' day then mia_total_amt_inusd else 0 end) adto
+    from WHOWNER.BT_MP_MIA
+    where mia_status_id = 'DONE'
+    group by 1
+    ) qd
+    ON qa.cust = qd.cust
+  )
+with data primary index (cust_id) on commit preserve rows;
+
+
+
+-------------------------- VARIÁVEIS DO PRESENTE -------------------------- 
+
+-- EV mais recente
+create multiset volatile table estado_verif, no log as 
+  (
+  select distinct
+    a.cus_cust_id cust_id,
+    first_value(a.cus_cust_verif_id) over (partition by a.cus_cust_id order by a.cus_cust_verif_id desc) ev,
+    left(to_char(first_value(b.changed_dt) over (partition by b.cus_cust_id order by b.changed_dt desc)),10) data_ev
+  from WHOWNER.LK_CUS_CUSTOMERS_DATA a
+  left join WHOWNER.BT_CUST_VERIFICATIONS b
+    on a.cus_cust_id = b.cus_cust_id
+    and a.cus_cust_verif_id = b.cus_verif_id
+  join lista_inicial li
+    on li.cust_id = a.cus_cust_id
+  ) 
+with data primary index (cust_id) on commit preserve rows;
+
+
+-- itens disponiveis pra venda
+create multiset volatile table itens_disponiveis, no log as 
+  (
+  SELECT
+    a.cust cust_id,
+    sum(a.ite_quantity_available) qtdd_disp,
+    sum(a.ite_quantity_total) qtdd_tot,
+    round(sum(a.ite_quantity_available)/nullifzero(sum(a.ite_quantity_total)),2) ratio_disp
+  FROM
+    (
+    select
+      cus_cust_id_sel cust,
+      ite_quantity_available,
+      ite_quantity_total
+    from WHOWNER.LK_ITE_ITEMS_PH
+    where ite_item_status = 'A'
+    ) a
+  GROUP BY 1
+  )
+with data primary index (cust_id) on commit preserve rows; 
+
+
+-- saldo hoje
+create multiset volatile table saldo_hoje, no log as
+ (
+  select
+    sal.cus_cust_id cust_id,
+    sal.total_amount/cc.cco_tc_value as saldo_total_usd,
+    sal.unav_for_period_amount/cc.cco_tc_value as saldo_tp_usd,
+    (sal.unav_amount - sal.unav_for_period_amount)/cc.cco_tc_value as saldo_recla_usd,
+    (sal.total_amount - sal.unav_amount)/cc.cco_tc_value as saldo_disp_usd
+  from WHOWNER.BT_MP_SALDOS_SNAPSHOT_DAILY sal
+  join whowner.lk_currency_convertion cc
+    on sal.tim_day = cc.tim_day
+    and sal.sit_site_id = cc.sit_site_id
+  where sal.tim_day = current_date - interval '1' day
+ )
+with data primary index (cust_id) on commit preserve rows;
+
+
+-- orders 10d
+create multiset volatile table orders_10d, no log as 
+  (
+  select
+    cus_cust_id_sel cust_id,
+    count(ord_order_id) orders
+  from WHOWNER.BT_BIDS
+  where tim_day_winning_date >= current_date - interval '10' day
+  group by 1
+  )
+with data primary index (cust_id) on commit preserve rows;  
+
+
+-- reclas 10d
+create multiset volatile table reclas_10d, no log as 
+  (
+  select
+    cla_respondent_id cust_id,
+    count(cla_claim_id) claims
+  from WHOWNER.BT_CM_CLAIMS
+  where cla_date_claim_opened_dt >= current_date - interval '10' day
+    and cla_status_id not in ('cancel_purchase','return_opened','return_closed')
+  group by 1
+  )
+with data primary index (cust_id) on commit preserve rows;  
+
+
+-- ratio ord/recla 7d
+create multiset volatile table ratio_ord_recla_10d, no log as 
+  (
+  select
+    b.cust_id,
+    (case when round(b.claims/nullifzero(a.orders),2) > 0.5 then 1 else 0 end) alto_ratio_cl_ord,
+    (case when round(b.claims/nullifzero(a.orders),2) > 1 then 1 else 0 end) altissimo_ratio_cl_ord
+  from orders_10d a
+  left join reclas_10d b
+    on a.cust_id = b.cust_id
+  )
+with data primary index (cust_id) on commit preserve rows; 
+
+
+-- cashout hoje
+create multiset volatile table cashout_hoje, no log as 
+  (
+  select distinct
+    fm.cus_cust_id_sel cust_id,
+    sum(fm.bpp_cashout_final) cashout_7d
+  from lista_inicial li
+  join SCORING.fraud_main fm
+    on fm.cus_cust_id_sel = li.cust_id
+  where fm.tim_day_winning_date between current_date - interval '8' day and current_date - interval '1' day
+  group by 1
+  ) 
+with data primary index (cust_id) on commit preserve rows;
+
+
+
+-------------------------- EXECUÇÃO DA REGRA --------------------------
+
+-- tabla de scoring para subir las infos
+create table scoring.risk_micro_bof
+  (
+  cust_id int,
+  pico_pxq_unico float,
+  pico_asp_unico float,
+  pico_gmv_unico float,
+  pico_adto_unico float,
+  pxq_s1 float,
+  pxq_s2 float,
+  pxq_s3 float,
+  pxq_s4 float,
+  asp_s1 float,
+  asp_s2 float,
+  asp_s3 float,
+  asp_s4 float,
+  ratio_eletro float,
+  ratio_apparel float,
+  gmv_s1 float,
+  gmv_s2 float,
+  gmv_s3 float,
+  gmv_s4 float,
+  adto_s1 float,
+  adto_s2 float,
+  adto_s3 float,
+  adto_s4 float,
+  saldo_disp_usd float,
+  saldo_tp_usd float,
+  saldo_recla_usd float,
+  alto_ratio_cl_ord int,
+  altissimo_ratio_cl_ord int,
+  claims_10d int,
+  cashout_7d float,
+  qtdd_disp float,
+  qtdd_tot float,
+  ratio_disp float
+  );
+
+
+-- insertar dados na tabela
+insert into scoring.risk_micro_bof
+  select
+    a1.cust_id,
+    (case
+      when b.pxq_s1 > 0 and b.pxq_s2 = 0 and b.pxq_s3 = 0 and b.pxq_s4 = 0 then 'pxq_s1'
+      when b.pxq_s1 = 0 and b.pxq_s2 > 0 and b.pxq_s3 = 0 and b.pxq_s4 = 0 then 'pxq_s2'
+      when b.pxq_s1 = 0 and b.pxq_s2 = 0 and b.pxq_s3 > 0 and b.pxq_s4 = 0 then 'pxq_s3'
+      when b.pxq_s1 = 0 and b.pxq_s2 = 0 and b.pxq_s3 = 0 and b.pxq_s4 > 0 then 'pxq_s4'
+      else '-'
+    end) as pico_pxq_unico,
+    (case
+      when c.asp_s1 > 0 and c.asp_s2 = 0 and c.asp_s3 = 0 and c.asp_s4 = 0 then 'asp_s1'
+      when c.asp_s1 = 0 and c.asp_s2 > 0 and c.asp_s3 = 0 and c.asp_s4 = 0 then 'asp_s2'
+      when c.asp_s1 = 0 and c.asp_s2 = 0 and c.asp_s3 > 0 and c.asp_s4 = 0 then 'asp_s3'
+      when C.asp_s1 = 0 and c.asp_s2 = 0 and c.asp_s3 = 0 and c.asp_s4 > 0 then 'asp_s4'
+      else '-'
+    end) as pico_asp_unico,
+    (case
+      when e.gmv_s1 > 0 and e.gmv_s2 = 0 and e.gmv_s3 = 0 and e.gmv_s4 = 0 then 'gmv_s1'
+      when e.gmv_s1 = 0 and e.gmv_s2 > 0 and e.gmv_s3 = 0 and e.gmv_s4 = 0 then 'gmv_s2'
+      when e.gmv_s1 = 0 and e.gmv_s2 = 0 and e.gmv_s3 > 0 and e.gmv_s4 = 0 then 'gmv_s3'
+      when e.gmv_s1 = 0 and e.gmv_s2 = 0 and e.gmv_s3 = 0 and e.gmv_s4 > 0 then 'gmv_s4'
+      else '-'
+    end) as pico_gmv_unico,
+    (case
+      when g.adto_s1 > 0 and g.adto_s2 = 0 and g.adto_s3 = 0 and g.adto_s4 = 0 then 'adto_s1'
+      when g.adto_s1 = 0 and g.adto_s2 > 0 and g.adto_s3 = 0 and g.adto_s4 = 0 then 'adto_s2'
+      when g.adto_s1 = 0 and g.adto_s2 = 0 and g.adto_s3 > 0 and g.adto_s4 = 0 then 'adto_s3'
+      when g.adto_s1 = 0 and g.adto_s2 = 0 and g.adto_s3 = 0 and g.adto_s4 > 0 then 'adto_s4'
+      else '-'
+    end) as pico_adto_unico,
+    b.pxq_s1,
+    b.pxq_s2,
+    b.pxq_s3,
+    b.pxq_s4,
+    c.asp_s1,
+    c.asp_s2,
+    c.asp_s3,
+    c.asp_s4,
+    d.ratio_eletro,
+    d.ratio_apparel,
+    e.gmv_s1,
+    e.gmv_s2,
+    e.gmv_s3,
+    e.gmv_s4,
+    zeroifnull(g.adto_s1) adto_s1,
+    zeroifnull(g.adto_s2) adto_s2,
+    zeroifnull(g.adto_s3) adto_s3,
+    zeroifnull(g.adto_s4) adto_s4,
+    sh.saldo_disp_usd,
+    sh.saldo_tp_usd,
+    sh.saldo_recla_usd,
+    zeroifnull(ra.alto_ratio_cl_ord) alto_ratio_cl_ord,
+    zeroifnull(ra.altissimo_ratio_cl_ord) altissimo_ratio_cl_ord,
+    rh.claims claims_10d,
+    zeroifnull(ch.cashout_7d) cashout_7d,
+    zeroifnull(ih.qtdd_disp) qtdd_disp,
+    zeroifnull(ih.qtdd_tot) qtdd_tot,
+    zeroifnull(ih.ratio_disp) ratio_disp
+  from lista_inicial a1
+  join gmv_recente a2
+    on a1.cust_id = a2.cust_id
+  left join pxq_semanal b
+    on a1.cust_id = b.cust_id
+  left join asp_semanal c
+    on a1.cust_id = c.cust_id
+  left join verticais d
+    on a1.cust_id = d.cust_id
+  left join gmv_semanal e
+    on a1.cust_id = e.cust_id
+  left join has_mia f
+    on a1.cust_id = f.cust_id
+  left join adto_semanal g
+    on a1.cust_id = g.cust_id
+  left join estado_verif ev
+    on a1.cust_id = ev.cust_id
+  left join saldo_hoje sh
+    on a1.cust_id = sh.cust_id
+  left join itens_disponiveis ih
+    on a1.cust_id = ih.cust_id
+  left join reclas_10d rh
+    on a1.cust_id = rh.cust_id
+  left join ratio_ord_recla_10d ra
+    on a1.cust_id = ra.cust_id
+  left join cashout_hoje ch
+    on a1.cust_id = ch.cust_id
+  where f.has_mia=1
+    and (d.ratio_eletro > 0.5 or d.ratio_apparel > 0.5)
+    and ev.ev not in ('PREV_INHAB_PERM','MOD_INHAB_PERM','DUPL_INH_PERM','PAUSA_TOTAL','DUP_PERM','VENDCONT','POL_SPAM','SHILL_BIDDER','PDU','OTROS')
+    and rh.claims > 0;
+
+
+
+--------------------------- SELEÇÃO DE DADOS ---------------------------
+
+-- DDL dos dados
+select * from scoring.risk_micro_bof order by 1 desc, 6 desc;
+
+delete from scoring.risk_micro_bof where insert_date = current_date;
+
+UPDATE scoring.risk_micro_bof
+  SET site_id = 'XXX'
+  WHERE insert_date = current_date;
+
+
+
+
