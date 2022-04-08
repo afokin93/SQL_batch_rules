@@ -1,6 +1,6 @@
 # batch_rules
 Batch rules before turning them online rules
 
->> apr-mai/21: Risk Induces BOF by Fakes
->> apr-oct/21: Risk Micro BOF
->> out-nov/21: Risk BOF Electronics Peak
+> **apr-may/21**: Risk Induced BOF by Fakes<br />
+> **apr-oct/21**: Risk Micro BOF<br />
+> **out-nov/21**: Risk BOF Electronics Peak
