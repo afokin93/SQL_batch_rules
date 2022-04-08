@@ -1,0 +1,323 @@
+
+-- sellers que publicaram muitos electronics
+create multiset volatile table lista_inicial, no log as
+  (
+  SELECT
+    tab1.site_id site_id,
+    tab1.cust_id,
+    tab1.s1,
+    tab2.ratio_eletro_1
+  FROM
+    (
+    select
+      cus_cust_id_sel cust_id,
+      sit_site_id site_id,
+      sum(ite_quantity_total*ite_base_current_price) s1
+    from WHOWNER.LK_ITE_ITEMS_PH
+    where ite_auction_start between current_date - 7 and current_date
+    group by 1,2
+    having s1 > 100000
+    ) tab1
+  JOIN
+    (
+    select
+      a.cus_cust_id_sel cust_id,
+      round(cast(sum(case when b.vertical = 'CE' then 1 else 0 end) as float)/cast(count(a.ite_item_id) as float),2) ratio_eletro_1
+    from WHOWNER.LK_ITE_ITEMS_PH a
+    left join WHOWNER.LK_DOM_DOMAINS b
+      on a.ite_dom_domain_id = b.dom_domain_id
+    where cast(ite_auction_start_datetime as date) between current_date - 7 and current_date
+    group by 1
+    having ratio_eletro_1 > 0.5
+    ) tab2
+    ON tab1.cust_id = tab2.cust_id
+  )
+with data primary index (cust_id) on commit preserve rows;
+
+
+-- select * from lista_inicial;
+-- select * from lista_inicial where site_id = 'MLB';
+
+
+-- evolução diária das verticais
+create multiset volatile table composicao_ce, no log as
+  (
+  SELECT
+    li.site_id,
+    a.cust_id,
+    (case
+      when b.ratio_eletro_2 = 0 and a.ratio_eletro_1 = 0 then 0
+      when b.ratio_eletro_2 > 0 and a.ratio_eletro_1 = 0 then 0
+      when b.ratio_eletro_2 = 0 and a.ratio_eletro_1 > 0 then 1000
+      else round(cast(a.ratio_eletro_1 as float)/cast(b.ratio_eletro_2 as float),2)
+    end) ratio_atual,
+    (case
+      when c.ratio_eletro_3 = 0 and b.ratio_eletro_2 = 0 then 0
+      when c.ratio_eletro_3 > 0 and b.ratio_eletro_2 = 0 then 0
+      when c.ratio_eletro_3 = 0 and b.ratio_eletro_2 > 0 then 1000
+      else round(cast(b.ratio_eletro_2 as float)/cast(c.ratio_eletro_3 as float),2)
+    end) ratio_passado,
+    zeroifnull(a.ratio_eletro_1) ratio_eletro_1,
+    zeroifnull(b.ratio_eletro_2) ratio_eletro_2,
+    zeroifnull(c.ratio_eletro_3) ratio_eletro_3,
+    zeroifnull(d.ratio_eletro_4) ratio_eletro_4,
+    zeroifnull(e.ratio_eletro_5) ratio_eletro_5,
+    zeroifnull(f.ratio_eletro_6) ratio_eletro_6,
+    zeroifnull(g.ratio_eletro_7) ratio_eletro_7,
+    zeroifnull(h.ratio_eletro_8) ratio_eletro_8
+  FROM lista_inicial li
+  LEFT JOIN
+    (select
+      a.cus_cust_id_sel cust_id,
+      round(cast(sum(case when b.vertical = 'CE' then 1 else 0 end) as float)/cast(count(a.ite_item_id) as float),2) ratio_eletro_1
+    from WHOWNER.LK_ITE_ITEMS_PH a left join WHOWNER.LK_DOM_DOMAINS b on a.ite_dom_domain_id = b.dom_domain_id
+    where cast(ite_auction_start_datetime as date) between current_date - 7 and current_date group by 1) a
+    ON li.cust_id = a.cust_id
+  LEFT JOIN
+    (select
+      a.cus_cust_id_sel cust_id,
+      round(cast(sum(case when b.vertical = 'CE' then 1 else 0 end) as float)/cast(count(a.ite_item_id) as float),2) ratio_eletro_2
+    from WHOWNER.LK_ITE_ITEMS_PH a left join WHOWNER.LK_DOM_DOMAINS b on a.ite_dom_domain_id = b.dom_domain_id
+    where cast(ite_auction_start_datetime as date) between current_date - 14 and current_date - 8 group by 1) b
+    ON li.cust_id = b.cust_id
+  LEFT JOIN
+    (select
+      a.cus_cust_id_sel cust_id,
+      round(cast(sum(case when b.vertical = 'CE' then 1 else 0 end) as float)/cast(count(a.ite_item_id) as float),2) ratio_eletro_3
+    from WHOWNER.LK_ITE_ITEMS_PH a left join WHOWNER.LK_DOM_DOMAINS b on a.ite_dom_domain_id = b.dom_domain_id
+    where cast(ite_auction_start_datetime as date) between current_date - 21 and current_date - 15 group by 1) c
+    ON li.cust_id = c.cust_id
+  LEFT JOIN
+    (select
+      a.cus_cust_id_sel cust_id,
+      round(cast(sum(case when b.vertical = 'CE' then 1 else 0 end) as float)/cast(count(a.ite_item_id) as float),2) ratio_eletro_4
+    from WHOWNER.LK_ITE_ITEMS_PH a left join WHOWNER.LK_DOM_DOMAINS b on a.ite_dom_domain_id = b.dom_domain_id
+    where cast(ite_auction_start_datetime as date) between current_date - 28 and current_date - 22 group by 1) d
+    ON li.cust_id = d.cust_id
+  LEFT JOIN
+    (select
+      a.cus_cust_id_sel cust_id,
+      round(cast(sum(case when b.vertical = 'CE' then 1 else 0 end) as float)/cast(count(a.ite_item_id) as float),2) ratio_eletro_5
+    from WHOWNER.LK_ITE_ITEMS_PH a left join WHOWNER.LK_DOM_DOMAINS b on a.ite_dom_domain_id = b.dom_domain_id
+    where cast(ite_auction_start_datetime as date) between current_date - 35 and current_date - 29 group by 1) e
+    ON li.cust_id = e.cust_id
+  LEFT JOIN
+    (select
+      a.cus_cust_id_sel cust_id,
+      round(cast(sum(case when b.vertical = 'CE' then 1 else 0 end) as float)/cast(count(a.ite_item_id) as float),2) ratio_eletro_6
+    from WHOWNER.LK_ITE_ITEMS_PH a left join WHOWNER.LK_DOM_DOMAINS b on a.ite_dom_domain_id = b.dom_domain_id
+    where cast(ite_auction_start_datetime as date) between current_date - 42 and current_date - 36 group by 1) f
+    ON li.cust_id = f.cust_id
+  LEFT JOIN
+    (select
+      a.cus_cust_id_sel cust_id,
+      round(cast(sum(case when b.vertical = 'CE' then 1 else 0 end) as float)/cast(count(a.ite_item_id) as float),2) ratio_eletro_7
+    from WHOWNER.LK_ITE_ITEMS_PH a left join WHOWNER.LK_DOM_DOMAINS b on a.ite_dom_domain_id = b.dom_domain_id
+    where cast(ite_auction_start_datetime as date) between current_date - 49 and current_date - 43 group by 1) g
+    ON li.cust_id = g.cust_id
+  LEFT JOIN
+    (select
+      a.cus_cust_id_sel cust_id,
+      round(cast(sum(case when b.vertical = 'CE' then 1 else 0 end) as float)/cast(count(a.ite_item_id) as float),2) ratio_eletro_8
+    from WHOWNER.LK_ITE_ITEMS_PH a left join WHOWNER.LK_DOM_DOMAINS b on a.ite_dom_domain_id = b.dom_domain_id
+    where cast(ite_auction_start_datetime as date) between current_date - 56 and current_date - 50 group by 1) h
+    ON li.cust_id = h.cust_id
+  )
+with data primary index (cust_id) on commit preserve rows;
+
+
+--select * from composicao_ce where cust_id = 'xxxxxx';
+
+
+-- evolução do pxq 
+create multiset volatile table pico_pxq, no log as
+  (
+  SELECT
+    li.site_id,
+    a.cust_id,
+    (case
+      when b.s2 = 0 and a.s1 = 0 then 0
+      when b.s2 > 0 and a.s1 = 0 then 0
+      when b.s2 = 0 and a.s1 > 0 then 1000
+      else round(cast(a.s1 as float)/cast(b.s2 as float),2)
+    end) ratio_atual,
+    (case
+      when c.s3 = 0 and b.s2 = 0 then 0
+      when c.s3 > 0 and b.s2 = 0 then 0
+      when c.s3 = 0 and b.s2 > 0 then 1000
+      else round(cast(b.s2 as float)/cast(c.s3 as float),2)
+    end) ratio_passado,
+    zeroifnull(a.s1) pxq_s1,
+    zeroifnull(b.s2) pxq_s2,
+    zeroifnull(c.s3) pxq_s3,
+    zeroifnull(d.s4) pxq_s4,
+    zeroifnull(e.s5) pxq_s5,
+    zeroifnull(f.s6) pxq_s6,
+    zeroifnull(g.s7) pxq_s7,
+    zeroifnull(h.s8) pxq_s8
+  FROM lista_inicial li
+  LEFT JOIN
+    (select cus_cust_id_sel cust_id, sum(ite_quantity_total*ite_base_current_price) s1 from WHOWNER.LK_ITE_ITEMS_PH where ite_auction_start between current_date - 7 and current_date group by 1) a
+    ON li.cust_id = a.cust_id
+  LEFT JOIN
+    (select cus_cust_id_sel cust_id, sum(ite_quantity_total*ite_base_current_price) s2 from WHOWNER.LK_ITE_ITEMS_PH where ite_auction_start between current_date - 14 and current_date - 8 group by 1) b
+    ON li.cust_id = b.cust_id
+  LEFT JOIN
+    (select cus_cust_id_sel cust_id, sum(ite_quantity_total*ite_base_current_price) s3 from WHOWNER.LK_ITE_ITEMS_PH where ite_auction_start between current_date - 21 and current_date - 15 group by 1) c
+    ON li.cust_id = c.cust_id
+  LEFT JOIN
+    (select cus_cust_id_sel cust_id, sum(ite_quantity_total*ite_base_current_price) s4 from WHOWNER.LK_ITE_ITEMS_PH where ite_auction_start between current_date - 28 and current_date - 22 group by 1) d
+    ON li.cust_id = d.cust_id
+  LEFT JOIN
+    (select cus_cust_id_sel cust_id, sum(ite_quantity_total*ite_base_current_price) s5 from WHOWNER.LK_ITE_ITEMS_PH where ite_auction_start between current_date - 35 and current_date - 29 group by 1) e
+    ON li.cust_id = e.cust_id
+  LEFT JOIN
+    (select cus_cust_id_sel cust_id, sum(ite_quantity_total*ite_base_current_price) s6 from WHOWNER.LK_ITE_ITEMS_PH where ite_auction_start between current_date - 42 and current_date - 36 group by 1) f 
+    ON li.cust_id = f.cust_id
+  LEFT JOIN
+    (select cus_cust_id_sel cust_id, sum(ite_quantity_total*ite_base_current_price) s7 from WHOWNER.LK_ITE_ITEMS_PH where ite_auction_start between current_date - 49 and current_date - 43 group by 1) g
+    ON li.cust_id = g.cust_id
+  LEFT JOIN
+    (select cus_cust_id_sel cust_id, sum(ite_quantity_total*ite_base_current_price) s8 from WHOWNER.LK_ITE_ITEMS_PH where ite_auction_start between current_date - 56 and current_date - 50 group by 1) h
+    ON li.cust_id = h.cust_id
+  )
+with data primary index (cust_id) on commit preserve rows;
+
+
+--select * from pico_pxq where cust_id = 'xxxxxx';
+
+
+-- usou adelantos recentemente
+create multiset volatile table uso_adto, no log as 
+  (
+  SELECT distinct
+    li.cust_id,
+    zeroifnull(a.adto) adto_s1,
+    zeroifnull(b.adto) adto_s2,
+    zeroifnull(c.adto) adto_s3,
+    zeroifnull(d.adto) adto_s4
+  FROM lista_inicial li
+  LEFT JOIN
+    (
+    select
+      cus_cust_id cust_id,
+      sum(case when cast(mia_creation_datetime as date) between current_date - interval '7' day and current_date - interval '1' day then mia_total_amt_inusd else 0 end) adto
+    from WHOWNER.BT_MP_MIA
+    where mia_status_id = 'DONE'
+    group by 1
+    ) a
+    ON li.cust_id = a.cust_id
+  LEFT JOIN
+    (
+    select
+      cus_cust_id cust_id,
+      sum(case when cast(mia_creation_datetime as date) between current_date - interval '14' day and current_date - interval '8' day then mia_total_amt_inusd else 0 end) adto
+    from WHOWNER.BT_MP_MIA
+    where mia_status_id = 'DONE'
+    group by 1
+    ) b
+    ON li.cust_id = b.cust_id
+  LEFT JOIN
+    (
+    select
+      cus_cust_id cust_id,
+      sum(case when cast(mia_creation_datetime as date) between current_date - interval '21' day and current_date - interval '15' day then mia_total_amt_inusd else 0 end) adto
+    from WHOWNER.BT_MP_MIA
+    where mia_status_id = 'DONE'
+    group by 1
+    ) c
+    ON li.cust_id = c.cust_id
+  LEFT JOIN
+    (
+    select
+      cus_cust_id cust_id,
+      sum(case when cast(mia_creation_datetime as date) between current_date - interval '28' day and current_date - interval '22' day then mia_total_amt_inusd else 0 end) adto
+    from WHOWNER.BT_MP_MIA
+    where mia_status_id = 'DONE'
+    group by 1
+    ) d
+    ON li.cust_id = d.cust_id
+  )
+with data primary index (cust_id) on commit preserve rows;
+
+
+
+-------------------------- EXECUÇÃO DA REGRA --------------------------
+
+-- tabla de scoring para subir las infos
+create table scoring.bof_pico_electronics
+  (
+  site_id text,
+  cust_id int,
+  ratio_atual ratio_atual_ce float,
+  ratio_passado ratio_passado_ce float,
+  ratio_eletro_1 float,
+  ratio_eletro_2 float,
+  ratio_eletro_3 float,
+  ratio_eletro_4 float,
+  ratio_atual ratio_atual_pxq float,
+  ratio_passado ratio_passado_pxq float,
+  pxq_s1 float,
+  pxq_s2 float,
+  pxq_s3 float,
+  pxq_s4 float,
+  adto_s1 float,
+  adto_s2 float,
+  adto_s3 float,
+  adto_s4 float
+  );
+
+
+-- insertar dados na tabela
+insert into scoring.bof_pico_electronics
+  select
+    a.site_id,
+    a.cust_id,
+    a.ratio_atual ratio_atual_ce,
+    a.ratio_passado ratio_passado_ce,
+    a.ratio_eletro_1,
+    a.ratio_eletro_2,
+    a.ratio_eletro_3,
+    a.ratio_eletro_4,
+    b.ratio_atual ratio_atual_pxq,
+    b.ratio_passado ratio_passado_pxq,
+    b.pxq_s1,
+    b.pxq_s2,
+    b.pxq_s3,
+    b.pxq_s4,
+    c.adto_s1,
+    c.adto_s2,
+    c.adto_s3,
+    c.adto_s4
+  from composicao_ce a
+  left join pico_pxq b
+    on a.cust_id = b.cust_id
+  left join uso_adto c
+    on a.cust_id = c.cust_id
+  where a.site_id = 'MLB'
+    and c.adto_s1 > 500
+    and (a.ratio_atual >= 2 or (a.ratio_eletro_1 = 1 and a.ratio_eletro_2 = 0) or (a.ratio_eletro_1 = 1 and a.ratio_eletro_2 = 1))
+    and (b.ratio_atual > 100 or (b.pxq_s1 > 100000 and b.pxq_s2 >= 0 and b.pxq_s3 + b.pxq_s4 > 0));
+
+
+
+--------------------------- SELEÇÃO DE DADOS ---------------------------
+
+-- DDL dos dados
+select * from scoring.bof_pico_electronics order by 1 desc, 6 desc;
+
+delete from scoring.bof_pico_electronics where insert_date = current_date;
+
+UPDATE scoring.bof_pico_electronics
+  SET site_id = 'XXX'
+  WHERE insert_date = current_date;
+
+
+
+
+
+-- domains a considerar
+('NOTEBOOKS','AIR CONDITIONERS','CONSOLES','GAMES','FREEZERS',
+'REFRIGERATOR AND FREEZER PARTS','REFRIGERATORS','CAMERA','DRONE','TV','VIDEO GAMES','CELLPHONES',
+'MOBILE ACCESSORIES','SMARTWATCHES','TABLET','HEADSET','TELEPHONES','TELEPHONY ACCESSORIES')
+
