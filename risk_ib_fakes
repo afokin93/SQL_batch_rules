@@ -1,0 +1,1162 @@
+
+--- Traemos los casos que ingresaron al SJ
+--- Para la parte de CBT nos quedamos con los que ingresaron al SJ (Se puso en producción el 08/03/2021) y son CBT1 y CBT3 
+
+create MULTISET VOLATILE TABLE sellers_MIP_SJ, no log as
+  (
+  SELECT
+    B.cus_cust_id_SEL AS Seller_ID,
+    d.sit_site_id_cus as Site_ID,   --- Revisar con table y preguntar Chechu si no necesitan joinear por site
+    A.JTY_ID AS Judgement_Actual,
+    (case when a.jty_id=1 then 'Strike 1' 
+      when a.jty_id=2 then 'Strike 2'
+      when a.jty_id=3 then 'Strike 3'
+      when a.jty_id=4 then 'MIP + RET_MP'
+      when a.jty_id=6 then 'MIP + FRAUDE ML'
+      else 'No_Action' end) as Tipo_Judgement_actual,
+    (cast(B.PRS_PROCESS_DATE as date)) as Fecha_Ingreso_SJ,
+    (extract (month from B.PRS_PROCESS_DATE)) as Mes_Juzg,  
+    (concat (extract(year from B.PRS_PROCESS_DATE),
+    (case when (extract(month from B.PRS_PROCESS_DATE)) in (1,2,3) then 'Q1'
+      when (extract(month from B.PRS_PROCESS_DATE)) in (4,5,6) then 'Q2'
+      when (extract(month from B.PRS_PROCESS_DATE)) in (7,8,9) then 'Q3'
+      else 'Q4' end)))   as Trimestre_Juzg,   --- para después agrupar por trimestre */
+    b.prs_days_range as Cant_Dias,          
+    (case when prs_days_range = '90' then 'seller_nuevo' else
+    (case when prs_days_range = '9' then 'end_of_strike' else prs_days_range end) end) as Paso_SJ, 
+    --- Ojo que ademas de 9 y 90, trae elagunos casos como 'Null'
+    --- trae 216 reg con cant_dias null, sin datos de fechas o de afeccion, etc!
+    a.sjd_affectation as Grado_Afeccion,   --- Traemos info del seller al momento del juicio
+    a.sjd_judment_user_type as Tipo_usuario,
+    b.prs_total_gmv_u30 as GMV,   --- Revisar calculo GMV, por si lo reemplazo por formula
+    b.livelisting as LL,
+    b.prs_denounces as Cant_Denuncias,
+    b.prs_detections as Cant_Detecciones,
+    (case when e.cus_cbt_flag_t1 = 1 then 'CBT1' --> track1
+      when e.cus_cbt_flag_t2 = 1 then 'CBT2' --> track2
+      when e.cus_cbt_flag_t3 = 1 then 'CBT3' --> track3
+      when e.cus_cbt_flag_t4 = 1 then 'CBT4' --> track4
+      else 'No_CBT' end) as Flag_CBT,
+    e.sit_site_id as Site_CBT,
+    (case when e.cus_cbt_flag_t1 = 1 then 1 else 0 end) as CBT1, --> track1
+    (case when e.cus_cbt_flag_t2 = 1 then 1 else 0 end) as CBT2, --> track2
+    (case when e.cus_cbt_flag_t3 = 1 then 1 else 0 end) as CBT3, --> track3
+    (case when e.cus_cbt_flag_t4 = 1 then 1 else 0 end) as CBT4, --> track4
+    e.cus_cbt_merchant_id as CBT_Merchant_ID,
+    e.cus_cbt_merchant_name as CBT_Merchant_Name,
+    e.cus_cbt_holding_group as CBT_Holding_Group,
+    e.ite_cbt_origin,
+    (case when (a.sjd_finished = '0') then 'Yes' else 'No' end) as OnGoing_Strike
+  FROM WHOWNER.BT_FRD_MDJ_SELLER_JUDGMENTS A 
+  LEFT JOIN WHOWNER.BT_FRD_MDJ_PROCESSED_SELLERS B
+    ON B.PRS_ID = A.PRS_Id 
+  LEFT JOIN WHOWNER.LK_CUS_CUSTOMERS_DATA d
+    ON A.CUS_CUST_ID_SEL=d.cus_cust_id 
+  LEFT JOIN WHOWNER.LK_CUS_CBT_ITEM_ORIGIN e
+    ON A.CUS_CUST_ID_SEL=e.cus_cust_id 
+  WHERE B.PRS_PROCESS_DATE >= '2019-10-01'  --- Fecha en la que arranca el SJ (antes tenía filtro >= 27/03/2020 
+                                       --- que es cuando se hizo el cambio de criterio de las restricciones, pero no nos afecta)
+  )
+with data primary index (Seller_ID) on commit preserve rows;
+
+
+--- Me quedo con los casos que tienen alguna marca de CBT (Salida 1 - CBT)
+create MULTISET VOLATILE TABLE Salida_CBT, no log as 
+  (
+  select
+    Seller_ID,
+    Judgement_Actual,
+    Tipo_Judgement_actual, 
+    Fecha_Ingreso_SJ, 
+    -- Mes_Juzg,
+    -- Trimestre_Juzg, 
+    Cant_Dias,
+    Paso_SJ,
+    Tipo_usuario,
+    -- GMV, 
+    LL,
+    Cant_Denuncias,
+    Cant_Detecciones,
+    Flag_CBT,
+    Site_CBT,
+    CBT_Merchant_ID,
+    CBT_Merchant_Name,
+    CBT_Holding_Group,
+    ite_cbt_origin,
+    OnGoing_Strike
+  from sellers_MIP_SJ
+    qualify row_number() over (partition by seller_ID
+  order by fecha_ingreso_SJ desc) = 1
+  )
+with data primary index (Seller_ID) on commit preserve rows;
+
+
+--- Me quedo con los casos que tienen alguna marca de CBT (Salida 2 - CBT)
+create MULTISET VOLATILE TABLE Salida_CBT_2, no log as
+  (
+  select
+    Seller_ID,
+    Judgement_Actual,
+    Tipo_Judgement_actual, 
+    Fecha_Ingreso_SJ, 
+    Cant_Dias,
+    Paso_SJ,
+    Tipo_usuario, 
+    LL,
+    Cant_Denuncias,
+    Cant_Detecciones,
+    Flag_CBT,
+    Site_CBT,
+    CBT_Merchant_ID,
+    CBT_Merchant_Name,
+    CBT_Holding_Group,
+    ite_cbt_origin
+  from sellers_MIP_SJ
+  where fecha_ingreso_sj >= (current_date - 9)
+    qualify row_number() over (partition by seller_ID
+  order by fecha_ingreso_SJ desc) = 1
+  )
+with data primary index (Seller_ID) on commit preserve rows;
+
+
+-- sellers que tiveram s2 ou s3
+create multiset volatile table listas_sellers_s2, no log as
+  (
+  select
+    Seller_ID as cust_id,
+    Site_CBT as site_id,
+    Tipo_Judgement_actual as judgement,
+    Fecha_Ingreso_SJ as fecha_judgement,
+    Cant_Denuncias as qtdd_dens,
+    Cant_Detecciones as qtdd_detecs,
+    CBT_Holding_Group as grupo_conta
+  from Salida_CBT
+  where Tipo_Judgement_actual = 'Strike 2'
+    and Fecha_Ingreso_SJ >= current_date - interval '30' day
+    UNION
+  select
+    Seller_ID as cust_id,
+    Site_CBT as site_id,
+    Tipo_Judgement_actual as judgement,
+    Fecha_Ingreso_SJ as fecha_judgement,
+    Cant_Denuncias as qtdd_dens,
+    Cant_Detecciones as qtdd_detecs,
+    CBT_Holding_Group as grupo_conta
+  from Salida_CBT_2
+  where Tipo_Judgement_actual = 'Strike 2'
+    and Fecha_Ingreso_SJ >= current_date - interval '30' day
+  )
+with data primary index (cust_id) on commit preserve rows;
+
+
+-- criação de lista única de sellers com o que interessa para BOF
+create multiset volatile table lista_unica, no log as
+  (
+  select distinct
+    grupo_conta,
+    cust_id,
+    site_id,
+    judgement,
+    last_value(fecha_judgement) over (partition by cust_id order by fecha_judgement desc) as fecha_strike,
+    qtdd_dens,
+    qtdd_detecs
+  from listas_sellers_s2
+  )
+with data primary index (cust_id) on commit preserve rows;
+
+
+
+----------------------------------------------------------------------------------------
+-------------------------------------- ANÁLISE IBC -------------------------------------
+----------------------------------------------------------------------------------------
+
+---------------- STRIKE 2 vs. ORDER ---------------- 
+
+-- tempo entre strike 2 e última venda
+create multiset volatile table timings, no log as 
+  (
+  SELECT
+    a.cust cust_id,
+    a.fecha_strike,
+    a.fecha_order,
+    (current_date - a.fecha_strike) t_desde_strike,
+    (current_date - a.fecha_order) t_desde_order,
+    (current_date - b.fecha_item) t_desde_item
+  FROM
+    (
+    select distinct
+      lu.cust_id cust,
+      lu.judgement,
+      lu.fecha_strike fecha_strike,
+      bb.ord_order_id,
+      bb.tim_day_winning_date fecha_order
+    from WHOWNER.BT_BIDS bb
+    join lista_unica lu
+      on lu.cust_id = bb.cus_cust_id_sel
+    qualify 1 = row_number() over (partition by cus_cust_id_sel order by tim_day_winning_date desc)
+    ) a
+  LEFT JOIN
+    (
+    select distinct
+      lu.cust_id cust,
+      it.ite_item_id,
+      cast(it.ite_auction_start_datetime as date) fecha_item
+    from WHOWNER.LK_ITE_ITEMS_PH it
+    join lista_unica lu
+      on lu.cust_id = it.cus_cust_id_sel
+    qualify 1 = row_number() over (partition by cus_cust_id_sel order by ite_auction_start desc)
+    ) b
+  ON a.cust = b.cust
+  ) 
+with data primary index (cust_id) on commit preserve rows;
+
+
+
+-------------------------- IMAPCTO DE STRIKE 2 EN ADTOS -------------------------- 
+
+-- has adtos hoje
+create multiset volatile table has_mia, no log as 
+  (
+  select distinct
+    mia.cus_cust_id cust_id,
+    mia.group_id,
+    mia.group_allowed_advance_days mia_days,
+    (case when mia.status='allowed' then 1 else 0 end) has_mia
+  from whowner.lk_mp_mia_user_hist mia
+  join lista_unica lu
+    on lu.cust_id = mia.cus_cust_id
+  qualify 1 = row_number() over (partition by mia.cus_cust_id order by last_update_date desc)
+  ) 
+with data primary index (cust_id) on commit preserve rows;
+
+
+-- adto de risco
+-- create multiset volatile table adto_riesgoso, no log as 
+--  (
+--  select
+--    cus_cust_id cust_id,
+--    (case when group_allowed_advance_days <= 16 then 1 else 0 end) adto_riesgoso
+--  from WHOWNER.LK_MP_MIA_USER_HIST
+--  qualify 1 = row_number() over (partition by cus_cust_id order by last_update_date desc)
+--  )
+-- with data primary index (cust_id) on commit preserve rows;
+
+
+-- monto adtos
+create multiset volatile table montos_pre_post, no log as 
+  (
+  SELECT distinct
+    qa.cust cust_id,
+    zeroifnull(qa.monto) avg_monto_pre,
+    zeroifnull(qb.monto) avg_monto_post,
+    (case when qa.monto > 0 and qb.monto > 9 * qa.monto then 1 else 0 end) super_pico_adto,
+    (case when qa.monto > 0 and qb.monto > 3 * qa.monto then 1 else 0 end) aumentou_adto,
+    (case when qa.monto = 0 and qb.monto > 0 then 1 else 0 end) comecou_usar_adto
+  FROM
+    (
+    select
+      mia.cus_cust_id cust,
+      round(avg(case when cast(mia.mia_creation_datetime as date) < lu.fecha_strike and cast(mia.mia_creation_datetime as date) >= current_date - interval '90' day then mia.mia_total_amt_inusd else 0 end),2) monto
+    from WHOWNER.BT_MP_MIA mia
+    join lista_unica lu
+      on lu.cust_id = mia.cus_cust_id
+    where mia.mia_status_id = 'DONE'
+    group by 1
+    ) qa
+  LEFT JOIN
+    (
+    select
+      mia.cus_cust_id cust,
+      round(avg(case when cast(mia.mia_creation_datetime as date) >= lu.fecha_strike + 7 then mia.mia_total_amt_inusd else 0 end),2) monto
+    from WHOWNER.BT_MP_MIA mia
+    join lista_unica lu
+      on lu.cust_id = mia.cus_cust_id
+    where mia.mia_status_id = 'DONE'
+    group by 1
+    ) qb
+    ON qa.cust = qb.cust
+  ) 
+with data primary index (cust_id) on commit preserve rows;
+
+
+
+-------------------------- IMAPCTO DE STRIKE 2 EN RECLAMOS -------------------------- 
+
+-- reclas pre post
+create multiset volatile table reclas_pre_post, no log as 
+  (
+  SELECT distinct
+    b.cust cust_id,
+    zeroifnull(qa.gmv_recla/a.dias) avg_gmv_recla_pre,
+    zeroifnull(qb.gmv_recla/b.dias) avg_gmv_recla_post,
+    (case when zeroifnull(qb.gmv_recla/b.dias) > 2 * zeroifnull(qa.gmv_recla/a.dias) then 1 else 0 end) aumentou_recla
+  FROM
+    (
+    select
+      bb.cus_cust_id_sel cust,
+      count(bb.tim_day_winning_date) dias
+    from WHOWNER.BT_BIDS bb
+      join lista_unica lu
+      on lu.cust_id = bb.cus_cust_id_sel
+    where bb.tim_day_winning_date < lu.fecha_strike
+      and bb.tim_day_winning_date >= current_date - interval '90' day
+    group by 1
+    ) a
+  LEFT JOIN
+    (
+    select
+      bb.cus_cust_id_sel cust,
+      count(bb.tim_day_winning_date) dias
+    from WHOWNER.BT_BIDS bb
+      join lista_unica lu
+      on lu.cust_id = bb.cus_cust_id_sel
+    where bb.tim_day_winning_date >= lu.fecha_strike + 3
+    group by 1
+    ) b
+    ON a.cust = b.cust
+  LEFT JOIN
+    (
+    select
+      bb.cus_cust_id_sel cust,
+      sum(bb.bid_base_current_price * (case when cla.cla_claim_id is not null then 1 else 0 end)) gmv_recla
+    from WHOWNER.BT_BIDS bb
+    left join WHOWNER.BT_CM_CLAIMS cla
+      on bb.ord_order_id = cla.order_id
+    join lista_unica lu
+      on lu.cust_id = bb.cus_cust_id_sel
+    where bb.tim_day_winning_date < lu.fecha_strike
+      and bb.tim_day_winning_date >= current_date - interval '90' day
+    group by 1
+    ) qa
+    ON a.cust = qa.cust
+  LEFT JOIN
+    (
+    select
+      bb.cus_cust_id_sel cust,
+      sum(bb.bid_base_current_price * (case when cla.cla_claim_id is not null then 1 else 0 end)) gmv_recla
+    from WHOWNER.BT_BIDS bb
+    left join WHOWNER.BT_CM_CLAIMS cla
+      on bb.ord_order_id = cla.order_id
+    join lista_unica lu
+      on lu.cust_id = bb.cus_cust_id_sel
+    where bb.tim_day_winning_date >= lu.fecha_strike + 3
+    group by 1
+    ) qb
+    ON a.cust = qb.cust
+  ) 
+with data primary index (cust_id) on commit preserve rows;
+
+
+-- reclas hoy
+create multiset volatile table reclas_hoy, no log as 
+  (
+  select
+    bb.cus_cust_id_sel cust_id,
+    sum(case when cla.cla_claim_id is not null then 1 else 0 end) clains_7d,
+    count(bb.ord_order_id) orders_7d,
+    (case when count(bb.ord_order_id) > 0 and sum(case when cla.cla_claim_id is not null then 1 else 0 end) > 0.5 * count(bb.ord_order_id) then 0.5 else 0 end) as alto_ratio_cl_ord,
+    (case when count(bb.ord_order_id) > 0 and sum(case when cla.cla_claim_id is not null then 1 else 0 end) > count(bb.ord_order_id) then 1 else 0 end) as altissimo_ratio_cl_ord
+  from WHOWNER.BT_BIDS bb
+  left join WHOWNER.BT_CM_CLAIMS cla
+    on bb.ord_order_id = cla.order_id
+  join lista_unica lu
+    on lu.cust_id = bb.cus_cust_id_sel
+  where bb.tim_day_winning_date between current_date - interval '8' day and current_date - interval '2' day
+  group by 1
+  ) 
+with data primary index (cust_id) on commit preserve rows;  
+
+
+
+---------------------------------- REPUTAÇÃO HOJE --------------------------------- 
+
+-- reputacao hoje
+create multiset volatile table reputacao_hj, no log as 
+  (
+  select
+    rep.cus_cust_id_sel cust_id,
+    (case
+      when rep.rep_current_level in ('green_silver','green_gold','green_platinum') then -1
+      when rep.rep_current_level in ('green','light_green') then 0
+      when rep.rep_current_level = 'yellow' then 0.5
+      when rep.rep_current_level = 'orange' then 1
+      when rep.rep_current_level = 'red' then 1.5
+      else 0
+    end) reputacao_hj
+  from WHOWNER.BT_REP_SELLER_REPUTATION_PH rep
+  join lista_unica lu
+    on lu.cust_id = rep.cus_cust_id_sel
+  where rep.photo_id = current_date
+  ) 
+with data primary index (cust_id) on commit preserve rows;  
+
+
+
+-------------------------- IMAPCTO DE STRIKE 2 EN ENVIOS -------------------------- 
+
+-- ready_to_ship e shipped
+create multiset volatile table envios_pre_post, no log as 
+  (
+  SELECT distinct
+    qa.cust cust_id,
+    qa.ready_to_ship as ready_to_ship_pre,
+    qb.ready_to_ship as ready_to_ship_post,
+    qa.shipped as shipped_pre,
+    qb.shipped as shipped_post,
+    qa.cancelled as cancelled_pre,
+    qb.cancelled as cancelled_post,
+    (case when qb.ready_to_ship > qa.ready_to_ship then 0.5 else 0 end) aumentou_ready_to_ship,
+    (case when qb.shipped > qa.shipped then 0.5 else 0 end) aumentou_shipped,
+    (case when qb.cancelled > qa.cancelled then 0.5 else 0 end) aumentou_cancelled
+  FROM
+    (
+     select
+      sh.shp_sender_id cust,
+      round(cast(sum(case when sh.shp_status_id='ready_to_ship' then 1 else 0 end) as float)/cast(count(sh.shp_status_id) as float),2) ready_to_ship,
+      round(cast(sum(case when sh.shp_status_id='shipped' then 1 else 0 end) as float)/cast(count(sh.shp_status_id) as float),2) shipped,
+      round(cast(sum(case when sh.shp_status_id='cancelled' then 1 else 0 end) as float)/cast(count(sh.shp_status_id) as float),2) cancelled
+    from WHOWNER.BT_SHP_SHIPMENTS sh
+    join lista_unica lu
+      on sh.shp_sender_id = lu.cust_id
+    where sh.shp_type = 'forward'
+      and sh.shp_date_created_id < lu.fecha_strike
+      and sh.shp_date_created_id >= current_date - interval '90' day
+    group by 1
+    ) qa
+  LEFT JOIN
+    (
+    select
+      sh.shp_sender_id cust,
+      round(cast(sum(case when sh.shp_status_id='ready_to_ship' then 1 else 0 end) as float)/cast(count(sh.shp_status_id) as float),2) ready_to_ship,
+      round(cast(sum(case when sh.shp_status_id='shipped' then 1 else 0 end) as float)/cast(count(sh.shp_status_id) as float),2) shipped,
+      round(cast(sum(case when sh.shp_status_id='cancelled' then 1 else 0 end) as float)/cast(count(sh.shp_status_id) as float),2) cancelled
+    from WHOWNER.BT_SHP_SHIPMENTS sh
+    join lista_unica lu
+      on sh.shp_sender_id = lu.cust_id
+    where sh.shp_type = 'forward'
+      and sh.shp_date_created_id >= lu.fecha_strike + 3
+    group by 1
+    ) qb
+    ON qa.cust = qb.cust
+  ) 
+with data primary index (cust_id) on commit preserve rows;
+
+
+
+-------------------------- IMAPCTO DE STRIKE 2 EN VENTAS -------------------------- 
+
+-- pxq
+create multiset volatile table pxq_pre_post, no log as 
+  (
+  SELECT distinct
+    qa.cust cust_id,
+    qa.pxq/a.dias as avg_pxq_pre,
+    qb.pxq/a.dias as avg_pxq_post,
+    (case when qb.pxq/a.dias > 10 * qa.pxq/a.dias then 1 else 0 end) super_pico_pxq,
+    (case when qb.pxq/a.dias > 5 * qa.pxq/a.dias then 1 else 0 end) pico_pxq,
+    (case when qb.pxq is null then 1 else 0 end) is_churned,
+    (case when qb.pxq/a.dias < 0.2 * qa.pxq/a.dias then 1 else 0 end) is_churning
+  FROM
+    (
+    select
+      it.cus_cust_id_sel cust,
+      count(it.ite_auction_start) dias
+    from WHOWNER.LK_ITE_ITEMS_PH it
+    join lista_unica lu
+      on lu.cust_id = it.cus_cust_id_sel
+    where it.ite_auction_start < lu.fecha_strike
+      and it.ite_auction_start >= current_date - interval '90' day
+    group by 1
+    ) a
+  LEFT JOIN
+    (
+    select
+      it.cus_cust_id_sel cust,
+      sum(it.ite_quantity_total * it.ite_base_current_price) pxq
+    from WHOWNER.LK_ITE_ITEMS_PH it
+    join lista_unica lu
+      on lu.cust_id = it.cus_cust_id_sel
+    where it.ite_auction_start < lu.fecha_strike
+      and it.ite_auction_start >= current_date - interval '90' day
+    group by 1
+    ) qa
+    ON a.cust = qa.cust
+  LEFT JOIN
+    (
+    select
+      it.cus_cust_id_sel cust,
+      sum(it.ite_quantity_total * it.ite_base_current_price) pxq
+    from WHOWNER.LK_ITE_ITEMS_PH it
+    join lista_unica lu
+      on lu.cust_id = it.cus_cust_id_sel
+    where it.ite_auction_start >= lu.fecha_strike + 3
+    group by 1
+    ) qb
+    ON qa.cust = qb.cust
+  ) 
+with data primary index (cust_id) on commit preserve rows;
+
+
+-- gmv
+create multiset volatile table gmv_pre_post, no log as 
+  (
+  SELECT distinct
+    qa.cust cust_id,
+    qa.gmv/a.dias as avg_gmv_pre,
+    qb.gmv/a.dias as avg_gmv_post,
+    (case when qb.gmv/a.dias > 10 * qa.gmv/a.dias then 1 else 0 end) super_pico_gmv,
+    (case when qb.gmv/a.dias > 5 * qa.gmv/a.dias then 1 else 0 end) pico_gmv,
+    (case when qb.gmv is null then 1 else 0 end) is_churned2,
+    (case when qb.gmv/a.dias < 0.2 * qa.gmv/a.dias then 1 else 0 end) is_churning2
+  FROM
+    (
+    select
+      bb.cus_cust_id_sel cust,
+      count(bb.tim_day_winning_date) dias
+    from WHOWNER.BT_BIDS bb
+      join lista_unica lu
+      on lu.cust_id = bb.cus_cust_id_sel
+    where bb.tim_day_winning_date < lu.fecha_strike
+      and bb.tim_day_winning_date >= current_date - interval '90' day
+    group by 1
+    ) a
+  LEFT JOIN
+    (
+    select
+      bb.cus_cust_id_sel cust,
+      sum(bb.bid_base_current_price) gmv
+    from WHOWNER.BT_BIDS bb
+    join lista_unica lu
+      on lu.cust_id = bb.cus_cust_id_sel
+    where bb.tim_day_winning_date < lu.fecha_strike
+      and bb.tim_day_winning_date >= current_date - interval '90' day
+    group by 1
+    ) qa
+    ON a.cust = qa.cust
+  LEFT JOIN
+    (
+    select
+      bb.cus_cust_id_sel cust,
+      sum(bb.bid_base_current_price) gmv
+    from WHOWNER.BT_BIDS bb
+    join lista_unica lu
+      on lu.cust_id = bb.cus_cust_id_sel
+    where bb.tim_day_winning_date >= lu.fecha_strike + 3
+    group by 1
+    ) qb
+    ON qa.cust = qb.cust
+  ) 
+with data primary index (cust_id) on commit preserve rows;
+
+
+-- asp
+create multiset volatile table asp_pre_post, no log as 
+  (
+  SELECT distinct
+    qa.cust cust_id,
+    qa.asp as avg_asp_pre,
+    qb.asp as avg_asp_post,
+    (case when qb.asp > 10 * qa.asp then 0.5 else 0 end) super_pico_asp,
+    (case when qb.asp > 5 * qa.asp then 0.5 else 0 end) pico_asp
+  FROM
+    (
+    select
+      it.cus_cust_id_sel cust,
+      round(avg(it.ite_base_current_price),2) asp
+    from WHOWNER.LK_ITE_ITEMS_PH it
+    join lista_unica lu
+      on lu.cust_id = it.cus_cust_id_sel
+    where it.ite_auction_start < lu.fecha_strike
+      and it.ite_auction_start >= current_date - interval '90' day
+    group by 1
+    ) qa
+  LEFT JOIN
+    (
+    select
+      it.cus_cust_id_sel cust,
+      round(avg(it.ite_base_current_price),2) asp
+    from WHOWNER.LK_ITE_ITEMS_PH it
+    join lista_unica lu
+      on lu.cust_id = it.cus_cust_id_sel
+    where it.ite_auction_start >= lu.fecha_strike + 3
+    group by 1
+    ) qb
+    ON qa.cust = qb.cust
+  ) 
+with data primary index (cust_id) on commit preserve rows;
+
+
+-- verticais
+create multiset volatile table verticais_pre_post, no log as 
+  (
+  SELECT distinct
+    a.cust cust_id,
+    a.qtdd_eletro_pre/i.qtdd_total_pre as eletro_pre,
+    b.qtdd_eletro_post/j.qtdd_total_post as eletro_post,
+    (case when b.qtdd_eletro_post/j.qtdd_total_post > 2 * a.qtdd_eletro_pre/i.qtdd_total_pre then 1 else 0 end) aumentou_eletro
+  FROM
+    (
+    select
+      bb.cus_cust_id_sel cust,
+      count(bb.ord_order_id) qtdd_eletro_pre
+    from WHOWNER.BT_BIDS bb
+    join lista_unica lu
+      on lu.cust_id = bb.cus_cust_id_sel
+    where bb.tim_day_winning_date < lu.fecha_strike
+      and bb.tim_day_winning_date >= current_date - interval '90' day
+      and bb.vertical = 'consumer_electronics'
+    group by 1
+    ) a
+  LEFT JOIN
+    (
+    select
+      bb.cus_cust_id_sel cust,
+      count(bb.ord_order_id) qtdd_eletro_post
+    from WHOWNER.BT_BIDS bb
+    join lista_unica lu
+      on lu.cust_id = bb.cus_cust_id_sel
+    where bb.tim_day_winning_date >= lu.fecha_strike + 3
+      and bb.vertical = 'consumer_electronics'
+    group by 1
+    ) b
+    ON a.cust = b.cust
+  LEFT JOIN
+    (
+    select
+      bb.cus_cust_id_sel cust,
+      count(bb.ord_order_id) qtdd_total_pre
+    from WHOWNER.BT_BIDS bb
+    join lista_unica lu
+      on lu.cust_id = bb.cus_cust_id_sel
+    where bb.tim_day_winning_date < lu.fecha_strike
+      and bb.tim_day_winning_date >= current_date - interval '90' day
+    group by 1
+    ) i
+    ON a.cust = i.cust
+  LEFT JOIN
+    (
+    select
+      bb.cus_cust_id_sel cust,
+      count(bb.ord_order_id) qtdd_total_post
+    from WHOWNER.BT_BIDS bb
+    join lista_unica lu
+      on lu.cust_id = bb.cus_cust_id_sel
+    where bb.tim_day_winning_date >= lu.fecha_strike + 3
+    group by 1
+    ) j
+    ON a.cust = j.cust
+  ) 
+with data primary index (cust_id) on commit preserve rows;
+
+
+-- eletronics hoy
+create multiset volatile table eletronics_hoy, no log as 
+  (
+  SELECT distinct
+    a.cust cust_id,
+    (case when a.qtdd_eletro/b.qtdd_total > 0.8 then 0.5 else 0 end) maioria_eletro_hj
+  FROM
+    (
+    select
+      bb.cus_cust_id_sel cust,
+      count(bb.ord_order_id) qtdd_eletro
+    from WHOWNER.BT_BIDS bb
+    join lista_unica lu
+      on lu.cust_id = bb.cus_cust_id_sel
+    where bb.tim_day_winning_date >= current_date - interval '7' day
+    group by 1
+    ) a
+  LEFT JOIN
+    (
+    select
+      bb.cus_cust_id_sel cust,
+      count(bb.ord_order_id) qtdd_total
+    from WHOWNER.BT_BIDS bb
+    join lista_unica lu
+      on lu.cust_id = bb.cus_cust_id_sel
+    where bb.tim_day_winning_date >= current_date - interval '7' day
+      and bb.vertical = 'consumer_electronics'
+    group by 1
+    ) b
+    ON a.cust = b.cust
+  ) 
+with data primary index (cust_id) on commit preserve rows;
+
+
+
+-------------------------- IMAPCTO DE STRIKE 2 SALDO --------------------------
+
+-- tabla direta de saldos em dolar
+create multiset volatile table saldos_pre_post, no log as 
+  (
+  SELECT distinct
+    qa.cust as cust_id,
+    qa.saldo_total_usd as avg_total_pre,
+    qb.saldo_total_usd as avg_total_post,
+    qa.saldo_tp_usd as avg_tp_pre,
+    qb.saldo_tp_usd as avg_tp_post,
+    qa.saldo_recla_usd as avg_recla_pre,
+    qb.saldo_recla_usd as avg_recla_post,
+    qa.saldo_disp_usd as avg_dispon_pre,
+    qb.saldo_disp_usd as avg_dispon_post,
+    (case when qb.saldo_total_usd < 0.5 * qa.saldo_total_usd then 1 else 0 end) diminuiu_s_total,
+    (case when qb.saldo_tp_usd < 0.5 * qa.saldo_tp_usd then 1 else 0 end) diminuiu_s_tp,
+    (case when qb.saldo_recla_usd > qa.saldo_recla_usd then 1 else 0 end) aumentou_s_recla,
+    (case when qb.saldo_disp_usd < 0.5 * qa.saldo_disp_usd then 1 else 0 end) diminuiu_s_dispon,
+    (case when qa.saldo_disp_usd > 0 and qb.saldo_disp_usd < 0 then 1 else 0 end) surgiu_saldo_negativo,
+    (case when qa.saldo_disp_usd < 0 and qb.saldo_disp_usd > 0 then -1 else 0 end) eliminou_saldo_negativo,
+    (case when qa.saldo_disp_usd < 0 and qb.saldo_disp_usd < 0 then 1 else 0 end) menteve_saldo_negativo,
+    (case when qa.saldo_recla_usd < qa.saldo_tp_usd and qb.saldo_recla_usd > qb.saldo_tp_usd then 1 else 0 end) surgiu_risco_cashout,
+    (case when qa.saldo_recla_usd > qa.saldo_tp_usd and qb.saldo_recla_usd < qb.saldo_tp_usd then -0.5 else 0 end) eliminou_risco_cashout,
+    (case when qa.saldo_recla_usd > qa.saldo_tp_usd and qb.saldo_recla_usd > qb.saldo_tp_usd then 1 else 0 end) manteve_risco_cashout
+  FROM
+    (
+    select distinct
+      sal.cus_cust_id cust,
+      round(avg(sal.total_amount/cc.cco_tc_value),2) saldo_total_usd,
+      round(avg(sal.unav_for_period_amount/cc.cco_tc_value),2) saldo_tp_usd,
+      round(avg((sal.unav_amount - sal.unav_for_period_amount)/cc.cco_tc_value),2) saldo_recla_usd,
+      round(avg((sal.total_amount - sal.unav_amount)/cc.cco_tc_value),2) saldo_disp_usd
+    from lista_unica lu
+    join WHOWNER.BT_MP_SALDOS_SNAPSHOT_DAILY sal
+      on sal.cus_cust_id = lu.cust_id 
+    join whowner.lk_currency_convertion cc
+      on sal.tim_day = cc.tim_day
+      and sal.sit_site_id = cc.sit_site_id
+    where sal.tim_day < lu.fecha_strike
+      and sal.tim_day >= current_date - interval '90' day
+    group by 1
+    ) as qa
+  LEFT JOIN
+   (
+    select distinct
+      sal.cus_cust_id cust,
+      round(avg(sal.total_amount/cc.cco_tc_value),2) saldo_total_usd,
+      round(avg(sal.unav_for_period_amount/cc.cco_tc_value),2) saldo_tp_usd,
+      round(avg((sal.unav_amount - sal.unav_for_period_amount)/cc.cco_tc_value),2) saldo_recla_usd,
+      round(avg((sal.total_amount - sal.unav_amount)/cc.cco_tc_value),2) saldo_disp_usd
+    from lista_unica lu
+    join WHOWNER.BT_MP_SALDOS_SNAPSHOT_DAILY sal
+      on sal.cus_cust_id = lu.cust_id 
+    join whowner.lk_currency_convertion cc
+      on sal.tim_day = cc.tim_day
+      and sal.sit_site_id = cc.sit_site_id
+    where sal.tim_day >= lu.fecha_strike + 3
+    group by 1
+    ) as qb
+    ON qa.cust = qb.cust
+  ) 
+with data primary index (cust_id) on commit preserve rows;
+
+
+-- saldo hoje
+create multiset volatile table saldo_hoje, no log as 
+  (
+  select distinct
+    sal.cus_cust_id cust_id,
+    (case when (sal.unav_for_period_amount/cc.cco_tc_value) < ((sal.unav_amount - sal.unav_for_period_amount)/cc.cco_tc_value) then 1 else 0 end) sem_cobertura_hj,
+    (case when (sal.unav_amount - sal.unav_for_period_amount)/cc.cco_tc_value / (sal.total_amount - sal.unav_amount)/cc.cco_tc_value > 0.8 then 0.5 else 0 end) mto_saldo_recla,
+    (case when ((sal.total_amount - sal.unav_amount)/cc.cco_tc_value) < 0 then 1 else 0 end) saldo_negativo_hj
+    from lista_unica lu
+    join WHOWNER.BT_MP_SALDOS_SNAPSHOT_DAILY sal
+      on sal.cus_cust_id = lu.cust_id 
+    join whowner.lk_currency_convertion cc
+      on sal.tim_day = cc.tim_day
+      and sal.sit_site_id = cc.sit_site_id
+    where sal.tim_day = current_date
+  ) 
+with data primary index (cust_id) on commit preserve rows;
+
+
+  
+-------------------------- IMAPCTO DE STRIKE 2 CASHOUT BPP --------------------------
+
+-- tabla direta de saldos em dolar
+create multiset volatile table cashout_pre_post, no log as 
+  (
+  SELECT distinct
+    qa.cust as cust_id,
+    qa.avg_cashout as avg_cashout_pre,
+    qb.avg_cashout as avg_cashout_post,
+    (case when qb.avg_cashout > 2 * qa.avg_cashout then 1 else 0 end) aumentou_cashout,
+    (case when qb.avg_cashout < 0.5 * qa.avg_cashout then 0.5 else 0 end) diminuiu_cashout
+  FROM
+    (
+    select distinct
+      fm.cus_cust_id_sel cust,
+      avg(fm.bpp_cashout_final) avg_cashout
+    from lista_unica lu
+    join SCORING.fraud_main fm
+      on fm.cus_cust_id_sel = lu.cust_id
+    where fm.tim_day_winning_date < lu.fecha_strike
+      and fm.tim_day_winning_date >= current_date - interval '90' day
+    group by 1
+    ) as qa
+  LEFT JOIN
+   (
+    select distinct
+      fm.cus_cust_id_sel cust,
+      avg(fm.bpp_cashout_final) avg_cashout
+    from lista_unica lu
+    join SCORING.fraud_main fm
+      on fm.cus_cust_id_sel = lu.cust_id
+    where fm.tim_day_winning_date >= lu.fecha_strike + 3
+    group by 1
+    ) as qb
+    ON qa.cust = qb.cust
+  ) 
+with data primary index (cust_id) on commit preserve rows;
+
+
+
+-------------------------- RESTRIÇÕES GERAIS --------------------------
+
+-- EV mais recente
+create multiset volatile table estado_verif, no log as 
+  (
+  select distinct
+    a.cus_cust_id cust_id,
+    first_value(a.cus_cust_verif_id) over (partition by a.cus_cust_id order by a.cus_cust_verif_id desc) ev,
+    left(to_char(first_value(b.changed_dt) over (partition by b.cus_cust_id order by b.changed_dt desc)),10) data_ev
+  from WHOWNER.LK_CUS_CUSTOMERS_DATA a
+  left join WHOWNER.BT_CUST_VERIFICATIONS b
+    on a.cus_cust_id = b.cus_cust_id
+    and a.cus_cust_verif_id = b.cus_verif_id
+  join lista_unica lu
+    on lu.cust_id = a.cus_cust_id
+  ) 
+with data primary index (cust_id) on commit preserve rows;
+
+
+
+-------------------------- SELEÇÃO DE DADOS -------------------------- 
+
+-- seleção de dados
+create multiset volatile table selecao_de_dados, no log as 
+  (
+  select distinct
+    a.cust_id,
+    a0.Site_ID,
+    ev.ev,
+    a.t_desde_strike,
+    a.t_desde_order,
+    a.t_desde_item,
+    b.mia_days,
+    --zeroifnull(b1.adto_riesgoso) adto_riesgoso,
+    zeroifnull(c.avg_monto_pre) avg_monto_pre,
+    zeroifnull(c.avg_monto_post) avg_monto_post,
+    zeroifnull(d.avg_gmv_recla_pre) avg_gmv_recla_pre,
+    zeroifnull(d.avg_gmv_recla_post) avg_gmv_recla_post,
+    zeroifnull(h.ready_to_ship_pre) ready_to_ship_pre,
+    zeroifnull(h.ready_to_ship_post) ready_to_ship_post,
+    zeroifnull(h.shipped_pre) shipped_pre,
+    zeroifnull(h.shipped_post) shipped_post,
+    zeroifnull(h.cancelled_pre) cancelled_pre,
+    zeroifnull(h.cancelled_post) cancelled_post,
+    zeroifnull(i.avg_pxq_pre) avg_pxq_pre,
+    zeroifnull(i.avg_pxq_post) avg_pxq_post,
+    zeroifnull(i1.avg_gmv_pre) avg_gmv_pre,
+    zeroifnull(i1.avg_gmv_post) avg_gmv_post,
+    zeroifnull(i2.avg_asp_pre) avg_asp_pre,
+    zeroifnull(i2.avg_asp_post) avg_asp_post,
+    zeroifnull(j.eletro_pre) eletro_pre,
+    zeroifnull(j.eletro_post) eletro_post,
+    zeroifnull(l.avg_total_pre) avg_total_pre,
+    zeroifnull(l.avg_total_post) avg_total_post,
+    zeroifnull(l.avg_tp_pre) avg_tp_pre,
+    zeroifnull(l.avg_tp_post) avg_tp_post,
+    zeroifnull(l.avg_recla_pre) avg_recla_pre,
+    zeroifnull(l.avg_recla_post) avg_recla_post,
+    zeroifnull(l.avg_dispon_pre) avg_dispon_pre,
+    zeroifnull(l.avg_dispon_post) avg_dispon_post,
+    zeroifnull(cast(n.avg_cashout_pre as float)) avg_cashout_pre,
+    zeroifnull(cast(n.avg_cashout_post as float)) avg_cashout_post,
+    ---------------------
+    zeroifnull(c.aumentou_adto) aumentou_adto,
+    zeroifnull(c.super_pico_adto) super_pico_adto,
+    zeroifnull(c.comecou_usar_adto) comecou_usar_adto,
+    zeroifnull(d.aumentou_recla) aumentou_recla,
+    zeroifnull(e.alto_ratio_cl_ord) alto_ratio_cl_ord,
+    zeroifnull(e.altissimo_ratio_cl_ord) altissimo_ratio_cl_ord,
+    zeroifnull(g.reputacao_hj) reputacao_hj,
+    zeroifnull(h.aumentou_ready_to_ship) aumentou_ready_to_ship,
+    zeroifnull(h.aumentou_shipped) aumentou_shipped,
+    zeroifnull(h.aumentou_cancelled) aumentou_cancelled,
+    zeroifnull(i.pico_pxq) pico_pxq,
+    zeroifnull(i.super_pico_pxq) super_pico_pxq,
+    zeroifnull(i1.pico_gmv) pico_gmv,
+    zeroifnull(i1.super_pico_gmv) super_pico_gmv,
+    zeroifnull(i2.pico_asp) pico_asp,
+    zeroifnull(i2.super_pico_asp) super_pico_asp,
+    zeroifnull(i.is_churning) is_churning,
+    zeroifnull(i.is_churned) is_churned,
+    zeroifnull(i1.is_churning2) is_churning2,
+    zeroifnull(i1.is_churned2) is_churned2,
+    zeroifnull(j.aumentou_eletro) aumentou_eletro,
+    zeroifnull(k.maioria_eletro_hj) maioria_eletro_hj,
+    zeroifnull(l.diminuiu_s_total) diminuiu_s_total,
+    zeroifnull(l.diminuiu_s_tp) diminuiu_s_tp,
+    zeroifnull(l.aumentou_s_recla) aumentou_s_recla,
+    zeroifnull(l.diminuiu_s_dispon) diminuiu_s_dispon,
+    zeroifnull(l.surgiu_saldo_negativo) surgiu_saldo_negativo,
+    zeroifnull(l.eliminou_saldo_negativo) eliminou_saldo_negativo,
+    zeroifnull(l.menteve_saldo_negativo) menteve_saldo_negativo,
+    zeroifnull(l.surgiu_risco_cashout) surgiu_risco_cashout,
+    zeroifnull(l.eliminou_risco_cashout) eliminou_risco_cashout,
+    zeroifnull(l.manteve_risco_cashout) manteve_risco_cashout,
+    zeroifnull(m.saldo_negativo_hj) saldo_negativo_hj,
+    zeroifnull(m.mto_saldo_recla) mto_saldo_recla,
+    zeroifnull(m.sem_cobertura_hj) sem_cobertura_hj,
+    zeroifnull(n.aumentou_cashout) aumentou_cashout,
+    zeroifnull(n.diminuiu_cashout) diminuiu_cashout
+  from timings a
+  left join sellers_MIP_SJ a0
+    on a.cust_id = a0.Seller_ID
+  left join has_mia b
+    on a.cust_id = b.cust_id
+  --left join adto_riesgoso b1
+  --  on a.cust_id = b1.cust_id
+  left join montos_pre_post c
+    on a.cust_id = c.cust_id
+  left join reclas_pre_post d
+    on a.cust_id = d.cust_id
+  left join reclas_hoy e
+    on a.cust_id = e.cust_id
+  left join reputacao_hj g
+    on a.cust_id = g.cust_id
+  left join envios_pre_post h
+    on a.cust_id = h.cust_id
+  left join pxq_pre_post i
+    on a.cust_id = i.cust_id
+  left join gmv_pre_post i1
+    on a.cust_id = i1.cust_id
+  left join asp_pre_post i2
+    on a.cust_id = i2.cust_id
+  left join verticais_pre_post j
+    on a.cust_id = j.cust_id
+  left join eletronics_hoy k
+    on a.cust_id = k.cust_id
+  left join saldos_pre_post l
+    on a.cust_id = l.cust_id
+  left join saldo_hoje m
+    on a.cust_id = m.cust_id
+  left join cashout_pre_post n
+    on a.cust_id = n.cust_id
+  left join estado_verif ev
+    on a.cust_id = ev.cust_id
+  where b.has_mia = 1
+  ) 
+with data primary index (cust_id) on commit preserve rows;
+
+
+-- riscos de ib fakes
+create multiset volatile table score_ib_fakes, no log as 
+  (
+  select distinct
+    cust_id,
+    t_desde_strike,
+    t_desde_order,
+    t_desde_item,
+    
+    round(( cast(reputacao_hj as float) + cast(aumentou_eletro as float) + cast(maioria_eletro_hj as float) + cast(pico_pxq as float) + cast(super_pico_pxq as float) + cast(pico_gmv as float) + cast(super_pico_gmv as float) + cast(pico_asp as float) + cast(super_pico_asp as float) + cast(aumentou_ready_to_ship as float) + cast(aumentou_shipped as float) + cast(aumentou_adto as float) + cast(super_pico_adto as float) + cast(comecou_usar_adto as float) + cast(aumentou_recla as float) + cast(alto_ratio_cl_ord as float) + cast(altissimo_ratio_cl_ord as float) + cast(mto_saldo_recla as float)) /15,2) risk_ibof_fakes,
+    
+    round(( cast(reputacao_hj as float) + cast(is_churning as float) + cast(is_churned as float) + cast(is_churning2 as float) + cast(is_churned2 as float) + cast(aumentou_cancelled as float) + cast(aumentou_recla as float) + cast(surgiu_risco_cashout as float) + cast(eliminou_risco_cashout as float) + cast(manteve_risco_cashout as float) + cast(saldo_negativo_hj as float) + cast(sem_cobertura_hj as float) + cast(aumentou_cashout as float) + cast(diminuiu_cashout as float))/11.5,2) risk_ichurn_fakes,
+    
+    round(( cast(reputacao_hj as float) + cast(aumentou_eletro as float) + cast(maioria_eletro_hj as float) + cast(pico_pxq as float) + cast(super_pico_pxq as float) + cast(pico_gmv as float) + cast(super_pico_gmv as float) + cast(pico_asp as float) + cast(super_pico_asp as float) + cast(aumentou_ready_to_ship as float) + cast(aumentou_shipped as float) + cast(aumentou_adto as float) + cast(super_pico_adto as float) + cast(comecou_usar_adto as float) + cast(aumentou_recla as float) + cast(alto_ratio_cl_ord as float) + cast(altissimo_ratio_cl_ord as float) + cast(is_churning as float) + cast(is_churned as float) + cast(is_churning2 as float) + cast(is_churned2 as float) +  cast(aumentou_cancelled as float) + cast(surgiu_risco_cashout as float) + cast(eliminou_risco_cashout as float) + cast(manteve_risco_cashout as float) + cast(saldo_negativo_hj as float) + cast(sem_cobertura_hj as float) + cast(aumentou_cashout as float) + cast(diminuiu_cashout as float) + cast(mto_saldo_recla as float))/20,2) risk_ibofchurn_fakes,
+    --adto_riesgoso,
+    avg_monto_pre,
+    avg_monto_post,
+    avg_gmv_recla_pre,
+    avg_gmv_recla_post,
+    ready_to_ship_pre,
+    ready_to_ship_post,
+    shipped_pre,
+    shipped_post,
+    cancelled_pre,
+    cancelled_post,
+    avg_pxq_pre,
+    avg_pxq_post,
+    avg_gmv_pre,
+    avg_gmv_post,
+    avg_asp_pre,
+    avg_asp_post,
+    eletro_pre,
+    eletro_post,
+    avg_total_pre,
+    avg_total_post,
+    avg_tp_pre,
+    avg_tp_post,
+    avg_recla_pre,
+    avg_recla_post,
+    avg_dispon_pre,
+    avg_dispon_post,
+    avg_cashout_pre,
+    avg_cashout_post,
+    ---------------------
+    aumentou_adto,
+    super_pico_adto,
+    comecou_usar_adto,
+    aumentou_recla,
+    alto_ratio_cl_ord,
+    altissimo_ratio_cl_ord,
+    reputacao_hj,
+    aumentou_ready_to_ship,
+    aumentou_shipped,
+    aumentou_cancelled,
+    pico_pxq,
+    super_pico_pxq,
+    pico_gmv,
+    super_pico_gmv,
+    pico_asp,
+    super_pico_asp,
+    is_churning,
+    is_churned,
+    is_churning2,
+    is_churned2,
+    aumentou_eletro,
+    maioria_eletro_hj,
+    diminuiu_s_total,
+    diminuiu_s_tp,
+    aumentou_s_recla,
+    diminuiu_s_dispon,
+    surgiu_saldo_negativo,
+    eliminou_saldo_negativo,
+    menteve_saldo_negativo,
+    surgiu_risco_cashout,
+    eliminou_risco_cashout,
+    manteve_risco_cashout,
+    saldo_negativo_hj,
+    mto_saldo_recla,
+    sem_cobertura_hj,
+    aumentou_cashout,
+    diminuiu_cashout
+  from selecao_de_dados
+  where ev not in ('PREV_INHAB_PERM','MOD_INHAB_PERM','DUPL_INH_PERM','PAUSA_TOTAL','DUP_PERM','VENDCONT','POL_SPAM','SHILL_BIDDER','PDU','OTROS')
+  ) 
+with data primary index (cust_id) on commit preserve rows;
+
+
+-- junção dos dados e regra
+create multiset volatile table tabla_final, no log as 
+  (
+  select *
+  from score_ib_fakes
+  where (risk_ibof_fakes > 0.33 or risk_ichurn_fakes > 0.33 or risk_ibofchurn_fakes > 0.33)
+    and (t_desde_strike >= 7 and t_desde_strike <= 60)
+    and t_desde_order <= 7
+    and t_desde_item <= 7
+  )
+with data primary index (cust_id) on commit preserve rows;     
+
+
+
+-------------------------- EXECUÇÃO DA REGRA --------------------------
+
+-- tabla de scoring para subir las infos
+create table scoring.induced_bof_by_fakes
+  (
+  insert_date date,
+  cust_id int,
+  t_desde_strike int,
+  t_desde_order int,
+  t_desde_item int,
+  risk_ibof_fakes float,
+  risk_ichurn_fakes float,
+  risk_ibofchurn_fakes float,
+  --adto_riesgoso,
+  avg_monto_pre float,
+  avg_monto_post float,
+  avg_gmv_recla_pre float,
+  avg_gmv_recla_post float,
+  ready_to_ship_pre float,
+  ready_to_ship_post float,
+  shipped_pre float,
+  shipped_post float,
+  cancelled_pre float,
+  cancelled_post float,
+  avg_pxq_pre float,
+  avg_pxq_post float,
+  avg_gmv_pre float,
+  avg_gmv_post float,
+  avg_asp_pre float,
+  avg_asp_post float,
+  eletro_pre float,
+  eletro_post float,
+  avg_total_pre float,
+  avg_total_post float,
+  avg_tp_pre float,
+  avg_tp_post float,
+  avg_recla_pre float,
+  avg_recla_post float,
+  avg_dispon_pre float,
+  avg_dispon_post float,
+  avg_cashout_pre float,
+  avg_cashout_post float,
+  ---------------------
+  aumentou_adto int,
+  super_pico_adto int,
+  comecou_usar_adto int,
+  aumentou_recla int,
+  alto_ratio_cl_ord float,
+  altissimo_ratio_cl_ord float,
+  reputacao_hj float,
+  aumentou_ready_to_ship float,
+  aumentou_shipped float,
+  aumentou_cancelled float,
+  pico_pxq int,
+  super_pico_pxq int,
+  pico_gmv int,
+  super_pico_gmv int,
+  pico_asp float,
+  super_pico_asp float,
+  is_churning int,
+  is_churned int,
+  is_churning2 int,
+  is_churned2 int,
+  aumentou_eletro float,
+  maioria_eletro_hj float,
+  diminuiu_s_total int,
+  diminuiu_s_tp int,
+  aumentou_s_recla int,
+  diminuiu_s_dispon int,
+  surgiu_saldo_negativo int,
+  eliminou_saldo_negativo int,
+  menteve_saldo_negativo int,
+  surgiu_risco_cashout int,
+  eliminou_risco_cashout float,
+  manteve_risco_cashout int,
+  saldo_negativo_hj int,
+  mto_saldo_recla float,
+  sem_cobertura_hj float,
+  aumentou_cashout int,
+  diminuiu_cashout float
+  );
+
+
+-- insertar dados na tabela
+insert into scoring.induced_bof_by_fakes
+  select distinct
+    current_date as insert_date,
+    ftl.*
+  from tabla_final ftl
+  where not exists (select *
+                    from scoring.induced_bof_by_fakes ibf
+                    where ibf.cust_id = ftl.cust_id
+                      and ibf.insert_date >= current_date - 2);
+
+
+
+--------------------------- SELEÇÃO DE DADOS ---------------------------
+
+-- DDL dos dados
+select * from scoring.induced_bof_by_fakes order by 1 desc, 6 desc;
+
+delete from scoring.induced_bof_by_fakes where insert_date = current_date;
+
+UPDATE scoring.induced_bof_by_fakes
+  SET site_id = 'XXX'
+  WHERE insert_date = current_date;
+
+
+
+
