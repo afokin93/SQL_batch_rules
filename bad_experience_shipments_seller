@@ -1,0 +1,241 @@
+
+-------------------------- BÁSICO DO SELLER  -------------------------- 
+
+-- restricoes iniciais
+create multiset volatile table lista_inicial0, no log as
+  (
+  select
+    a.sit_site_id site_id,
+    a.cus_cust_id_sel cust_id,
+    cast(a.cus_ru_fixed_sel as date) fecha_regi,
+    sum(a.gmv_usd) gmv_180d
+  from SCORING.fraud_main a
+  left join SCORING.sellers_protected_users b
+    on a.cus_cust_id_sel = b.user_id
+  where b.user_id is null
+    and a.tim_day_winning_date >= current_date - 180
+    and a.sit_site_id in ('MLA','MLB','MLC','MCO','MLM', 'MPE', 'MLU')
+    and fecha_regi <= current_date - 180
+  group by 1,2,3
+  having gmv_180d > 50000
+  )
+with data primary index (cust_id) on commit preserve rows;
+
+
+-- alto gmv recente
+create multiset volatile table lista_inicial, no log as
+  (
+  select
+    a.site_id,
+    a.cust_id,
+    a.fecha_regi,
+    sum(b.gmv_usd) gmv_30d
+  from lista_inicial0 a
+  left join SCORING.fraud_main b
+    on a.cust_id = b.cus_cust_id_sel
+  where b.tim_day_winning_date >= current_date - 30
+  group by 1,2,3
+  having gmv_30d > 15000
+  )
+with data primary index (cust_id) on commit preserve rows;
+
+
+
+----------------------------- MAIN VARIÁVEIS ----------------------------- 
+
+-- qtdd de envios 7d
+create multiset volatile table qtdd_envios, no log as 
+  (
+  select
+    a.cust_id,
+    count(b.shp_status_id) qtdd_envios
+  from lista_inicial a
+  left join WHOWNER.BT_SHP_SHIPMENTS b
+    on a.cust_id = b.shp_sender_id
+  where b.shp_type = 'forward'
+    and b.shp_date_created_id >= current_date - 7
+  group by 1
+  )
+with data primary index  (cust_id) on commit preserve rows;
+
+
+-- envios ultimos 7d por dia
+create multiset volatile table envios_diarios, no log as 
+  (
+  SELECT distinct
+    qa.cust cust_id,
+    qa.ready_to_ship_1,
+    qa.shipped_1,
+    qb.ready_to_ship_2,
+    qb.shipped_2,
+    qc.ready_to_ship_3,
+    qc.shipped_3,
+    qd.ready_to_ship_4,
+    qd.shipped_4
+  FROM
+    (
+     select
+      shp_sender_id cust,
+      round(cast(sum(case when shp_status_id = 'ready_to_ship' then 1 else 0 end) as float)/cast(count(shp_status_id) as float),2) ready_to_ship_1,
+      round(cast(sum(case when shp_status_id = 'shipped' then 1 else 0 end) as float)/cast(count(shp_status_id) as float),2) shipped_1
+    from WHOWNER.BT_SHP_SHIPMENTS sh
+    where shp_type = 'forward'
+      and shp_date_created_id between current_date - 2 and current_date - 1
+    group by 1
+    ) qa
+  LEFT JOIN
+    (
+     select
+      shp_sender_id cust,
+      round(cast(sum(case when shp_status_id = 'ready_to_ship' then 1 else 0 end) as float)/cast(count(shp_status_id) as float),2) ready_to_ship_2,
+      round(cast(sum(case when shp_status_id = 'shipped' then 1 else 0 end) as float)/cast(count(shp_status_id) as float),2) shipped_2
+    from WHOWNER.BT_SHP_SHIPMENTS sh
+    where shp_type = 'forward'
+      and shp_date_created_id between current_date - 3 and current_date - 2
+    group by 1
+    ) qb
+    ON qa.cust = qb.cust
+  LEFT JOIN
+    (
+     select
+      shp_sender_id cust,
+      round(cast(sum(case when shp_status_id = 'ready_to_ship' then 1 else 0 end) as float)/cast(count(shp_status_id) as float),2) ready_to_ship_3,
+      round(cast(sum(case when shp_status_id = 'shipped' then 1 else 0 end) as float)/cast(count(shp_status_id) as float),2) shipped_3
+    from WHOWNER.BT_SHP_SHIPMENTS sh
+    where shp_type = 'forward'
+      and shp_date_created_id between current_date - 4 and current_date - 3
+    group by 1
+    ) qc
+    ON qa.cust = qc.cust
+  LEFT JOIN
+    (
+     select
+      shp_sender_id cust,
+      round(cast(sum(case when shp_status_id = 'ready_to_ship' then 1 else 0 end) as float)/cast(count(shp_status_id) as float),2) ready_to_ship_4,
+      round(cast(sum(case when shp_status_id = 'shipped' then 1 else 0 end) as float)/cast(count(shp_status_id) as float),2) shipped_4
+    from WHOWNER.BT_SHP_SHIPMENTS sh
+    where shp_type = 'forward'
+      and shp_date_created_id between current_date - 5 and current_date - 4
+    group by 1
+    ) qd
+  ON qa.cust = qd.cust
+  ) 
+with data primary index (cust_id) on commit preserve rows;
+
+
+-- saldo hoje
+create multiset volatile table saldo_hoje, no log as 
+  (
+  select distinct
+    a.site_id,
+    a.cust_id,
+    b.total_amount/c.cco_tc_value as saldo_total,
+    b.unav_for_period_amount/c.cco_tc_value as time_period,
+    (b.unav_amount - b.unav_for_period_amount)/c.cco_tc_value as saldo_recla,  
+    (b.total_amount - unav_amount)/C.cco_tc_value as saldo_disponivel
+  from lista_inicial a
+  left join WHOWNER.BT_MP_SALDOS_SNAPSHOT_DAILY b
+    on a.cust_id = b.cus_cust_id
+  join whowner.lk_currency_convertion c
+    on b.tim_day = c.tim_day
+    and b.sit_site_id = c.sit_site_id
+  where b.tim_day = current_date - 1
+  ) 
+with data primary index (cust_id) on commit preserve rows;
+
+
+-- restricao atual (apenas res)
+create multiset volatile table res_atual, no log as 
+  (
+  select
+    a.cust_id,
+    b.reason_id restriccion
+  from lista_inicial a
+  left join WHOWNER.BT_MPR_CUST_RESTRICTION b
+    on a.cust_id = b.cust_id
+  where cast(b.creation_date as date) = current_date
+  )
+with data primary index (cust_id) on commit preserve rows;
+
+
+-- tiene credits en retraso
+create multiset volatile table has_mc_overdue, no log as
+  (
+  select
+    a.cust_id,
+    (case when sum(b.crd_credit_total_amt_usd) > 0 then 1 else 0 end) has_cred_overdue
+  from lista_inicial a
+  left join WHOWNER.BT_MP_CREDITS_CREDIT_DETAIL b
+    on a.cust_id = b.cus_cust_id_borrower
+  where b.crd_credit_type = 'MERCHANT'
+    and b.crd_credit_status_id = 'OVERDUE'
+  group by 1
+  )
+with data primary index (cust_id) on commit preserve rows;
+
+
+
+-------------------------- EXECUÇÃO DA REGRA --------------------------
+
+-- tabla final
+create multiset volatile table tabla_final, no log as 
+  (
+  select
+    a.site_id,
+    a.cust_id,
+    d.saldo_recla/nullifzero(d.saldo_total) ratio_saldo_recla,
+    d.saldo_recla,
+    d.saldo_total,
+    d.saldo_disponivel,
+    d.time_period,
+    zeroifnull(f.has_cred_overdue) has_cred_overdue,
+    b.qtdd_envios,
+    c.ready_to_ship_1,
+    c.ready_to_ship_2,
+    c.ready_to_ship_3,
+    c.ready_to_ship_4,
+    c.shipped_1,
+    c.shipped_2,
+    c.shipped_3,
+    c.shipped_4
+  from lista_inicial a
+  left join qtdd_envios b
+    on a.cust_id = b.cust_id
+  left join envios_diarios c
+    on a.cust_id = c.cust_id
+  left join saldo_hoje d
+    on a.cust_id = d.cust_id
+  left join res_atual e
+    on a.cust_id = e.cust_id
+  left join has_mc_overdue f
+    on a.cust_id = f.cust_id
+  where e.restriccion is null
+    and ratio_saldo_recla is not null
+    and ratio_saldo_recla > 0.5
+    and d.saldo_recla > 0
+    and d.saldo_disponivel <= 0
+    and b.qtdd_envios > 50
+    and c.ready_to_ship_1 is not null
+    and c.ready_to_ship_2 is not null
+    and c.ready_to_ship_3 is not null
+    and c.ready_to_ship_2 >= 0.5
+    and c.ready_to_ship_3 >= 0.33
+    and c.ready_to_ship_4 > 0.16
+  )
+with data primary index (cust_id) on commit preserve rows; 
+
+
+-- insertar dados na tabela
+insert into scoring.risk_bad_shipping_bes
+  select distinct
+    current_date as insert_date,
+    a.*
+  from tabla_final a
+  where not exists (select *
+                    from scoring.risk_bad_shipping_bes b
+                    where b.cust_id = a.cust_id
+                      and b.insert_date >= current_date - 1);
+
+
+
+
