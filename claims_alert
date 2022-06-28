@@ -1,0 +1,853 @@
+
+-- lista inicial
+drop table if exists `meli-bi-data.SBOX_PF_MKT.ad_grupo_control`;
+CREATE TABLE `meli-bi-data.SBOX_PF_MKT.ad_grupo_control`
+OPTIONS (expiration_timestamp = TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL 1 DAY)
+) AS
+  SELECT
+    current_date - 1 as insert_date,
+    a.cus_cust_id as cust_id,
+    a.sit_site_id_cus as site_id
+  FROM `meli-bi-data.WHOWNER.LK_CUS_CUSTOMERS_DATA` a
+  JOIN 
+  (
+  select
+    cus_cust_id_sel,
+    sum(gmv_usd) gmv
+  from `meli-bi-data.SBOX_PF_MKT.fraud_main_mirror_metricas`
+  where tim_day_winning_date > current_date - 30
+  group by 1
+  order by 2 desc
+  limit 100
+  ) b
+    ON a.cus_cust_id = b.cus_cust_id_sel;
+
+
+-- dados para seguir
+drop table if exists `meli-bi-data.SBOX_PF_MKT.ad_datos_diarios`;
+CREATE TABLE `meli-bi-data.SBOX_PF_MKT.ad_datos_diarios`
+OPTIONS(
+  expiration_timestamp = TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL 1 DAY)
+) AS
+with
+  aux0 as
+  ( 
+  select
+    a.insert_date,
+    a.site_id,
+    a.cust_id,
+    count(b.ord_order_id) as qtdd_order,
+    sum(b.has_claim) as qtdd_recla,
+    count(b.has_claim)/sum(b.ord_order_id) as ratio_recla_order,
+    sum(b.gmv_usd) as gmv,
+    sum(b.gmv_usd * b.has_claim) as gmv_recla,
+    sum(b.gmv_usd * b.has_claim)/nullif(sum(b.gmv_usd),0) as ratio_gmv_gmvrecla,
+    sum(case when b.tipo_fraude = 'fraud_sel' then b.bpp_debt else 0 end) deuda,
+    sum(case when b.tipo_fraude = 'fraud_sel' then b.bpp_cashout_final + b.bpp_cashout_etiqueta else 0 end) as co,
+    sum(case when b.tipo_fraude = 'fraud_sel' then b.bpp_debt else 0 end)/nullif(sum(b.gmv_usd),0) as ratio_deuda_gmv,
+    sum(case when b.tipo_fraude = 'fraud_sel' then b.bpp_cashout_final + b.bpp_cashout_etiqueta else 0 end)/nullif(sum(b.gmv_usd),0) as ratio_co_gmv,
+    b.has_mia
+  from `meli-bi-data.SBOX_PF_MKT.ad_grupo_control` a
+  left join `meli-bi-data.SBOX_PF_MKT.fraud_main_mirror_metricas` b
+    on a.cust_id = b.cus_cust_id_sel
+  where b.tim_day_winning_date = a.insert_date
+  group by 1,2,3,14
+  ),
+
+  aux1 as
+  (
+  select
+    a.insert_date,
+    a.site_id,
+    a.cust_id,
+    count(b.ord_order_id) as qtdd_order_7d,
+    sum(b.has_claim) as qtdd_recla_7d,
+    count(b.has_claim)/sum(b.ord_order_id) as ratio_recla_order_7d,
+    sum(b.gmv_usd) as gmv_7d,
+    sum(b.gmv_usd * b.has_claim) as gmv_recla_7d,
+    sum(b.gmv_usd * b.has_claim)/nullif(sum(b.gmv_usd),0) as ratio_gmv_gmvrecla_7d,
+    sum(case when b.tipo_fraude = 'fraud_sel' then b.bpp_debt else 0 end) deuda_7d,
+    sum(case when b.tipo_fraude = 'fraud_sel' then b.bpp_cashout_final + b.bpp_cashout_etiqueta else 0 end) as co_7d,
+    sum(case when b.tipo_fraude = 'fraud_sel' then b.bpp_debt else 0 end)/nullif(sum(b.gmv_usd),0) as ratio_deuda_gmv_7d,
+    sum(case when b.tipo_fraude = 'fraud_sel' then b.bpp_cashout_final + b.bpp_cashout_etiqueta else 0 end)/nullif(sum(b.gmv_usd),0) as ratio_co_gmv_7d
+  from `meli-bi-data.SBOX_PF_MKT.ad_grupo_control` a
+  left join `meli-bi-data.SBOX_PF_MKT.fraud_main_mirror_metricas` b
+    on a.cust_id = b.cus_cust_id_sel
+  where b.tim_day_winning_date >= a.insert_date - 7
+  group by 1,2,3
+  ),
+
+  aux2 as
+  (
+  select distinct
+    a.insert_date,
+    a.site_id,
+    a.cust_id,
+    (case when (case when tim_day_winning_date between current_date - 30 and current_date then gmv_usd else 0 end)/nullif(case when tim_day_winning_date between current_date - 60 and current_date - 31 then gmv_usd else 0 end,0) < 0.2
+    and (case when tim_day_winning_date between current_date - 31 and current_date - 60 then gmv_usd else 0 end)/nullif(case when tim_day_winning_date between current_date - 90 and current_date - 61 then gmv_usd else 0 end,0) < 0.2
+     then 1 else 0 end) is_churning
+  from `meli-bi-data.SBOX_PF_MKT.ad_grupo_control` a
+  left join `meli-bi-data.SBOX_PF_MKT.fraud_main_mirror_metricas` b
+    on a.cust_id = b.cus_cust_id_sel
+  ),
+
+  aux3 as
+  (
+  select
+    a.insert_date,
+    a.site_id,
+    a.cust_id,
+    b.total_amount as saldo_total,
+    b.dispute_amount as saldo_recla,
+    b.unav_for_period_amount as saldo_tp,
+    b.dispute_amount / b.total_amount as perc_recla,
+    b.unav_for_period_amount / b.total_amount as perc_tp
+  from `meli-bi-data.SBOX_PF_MKT.ad_grupo_control` a
+  left join `meli-bi-data.WHOWNER.BT_MP_SALDOS_SNAPSHOT_DAILY` b
+    on cast(a.cust_id as int) = cast(b.cus_cust_id as int)
+  where b.tim_day = a.insert_date
+  ),
+
+  aux4 as
+  (
+  select
+    a.insert_date,
+    a.site_id,
+    a.cust_id,
+    trunc(coalesce(cast(sum(case when b.shp_status_id='pending' then 1 else 0 end) as numeric)/cast(count(b.shp_status_id) as numeric),0),2) pending,
+    trunc(coalesce(cast(sum(case when b.shp_status_id='shipped' then 1 else 0 end) as numeric)/cast(count(b.shp_status_id) as numeric),0),2) shipped,
+    trunc(coalesce(cast(sum(case when b.shp_status_id='delivered' then 1 else 0 end) as numeric)/cast(count(b.shp_status_id) as numeric),0),2) delivered,
+    trunc(coalesce(cast(sum(case when b.shp_status_id='cancelled' then 1 else 0 end) as numeric)/cast(count(b.shp_status_id) as numeric),0),2) cancelled
+  from `meli-bi-data.SBOX_PF_MKT.ad_grupo_control` a
+  left join `meli-bi-data.WHOWNER.BT_SHP_SHIPMENTS` b
+    on a.cust_id = b.shp_sender_id
+  where 1=1
+    and b.shp_type = 'forward'
+    and cast(b.shp_datetime_created_id as date) = a.insert_date
+  group by 1,2,3
+  ),
+
+  aux5 as
+  (
+  select
+    a.insert_date,
+    a.site_id,
+    a.cust_id,
+    trunc(coalesce(sum(c.amount_inusd),0),2) monto_adto
+  from `meli-bi-data.SBOX_PF_MKT.ad_grupo_control` a
+  left join `WHOWNER.BT_MP_MIA` b
+    on a.cust_id = b.cus_cust_id
+  left join `WHOWNER.BT_MP_MIA_OPERATION` c
+    on b.money_advanced_id = c.money_advance_id
+  where cast(b.creation_date as date) = a.insert_date
+  group by 1,2,3
+  ),
+
+  aux6 as
+  (
+  select
+    a.insert_date,
+    a.site_id,
+    a.cust_id,
+    trunc(sum(wit_withdrawal_dol_amt),2) monto_rtro
+  from `meli-bi-data.SBOX_PF_MKT.ad_grupo_control` a
+  left join `meli-bi-data.WHOWNER.BT_MP_WITHDRAWALS` b
+    on a.cust_id = b.cus_cust_id
+  where cast(b.wit_created_datetime as date) = a.insert_date
+  group by 1,2,3
+  ),
+
+  aux7 as
+  (
+  select
+    a.insert_date,
+    a.site_id,
+    a.cust_id,
+    trunc(ifnull(sum(cast(b.pay_payout_amount as numeric)/cast(c.cco_tc_value as numeric)),0),2) monto_payout
+  from `meli-bi-data.SBOX_PF_MKT.ad_grupo_control` a
+  left join `meli-bi-data.WHOWNER.BT_PAY_PAYOUT` b
+    on a.cust_id = b.cus_customer_id
+  left join `meli-bi-data.WHOWNER.LK_CURRENCY_CONVERTION` c
+    on cast(b.pay_payout_date_created_dttm as date) = c.tim_day
+    and b.sit_site_id = c.sit_site_id
+  where cast(b.pay_payout_date_created_dttm as date) = a.insert_date
+  group by 1,2,3
+  ),
+
+  aux8 as
+  (
+  select
+    a.insert_date,
+    a.site_id,
+    a.cust_id,
+    coalesce(sum(c.amount_inusd),0) monto_adto
+  from `meli-bi-data.SBOX_PF_MKT.ad_grupo_control` a
+  left join `WHOWNER.BT_MP_MIA` b
+    on a.cust_id = b.cus_cust_id
+  left join `WHOWNER.BT_MP_MIA_OPERATION` c
+    on b.money_advanced_id = c.money_advance_id
+  where 1=1
+    and cast(b.creation_date as date) >= a.insert_date - 30
+  group by 1,2,3
+  ),
+
+  aux9 as
+  (
+  select
+    a.insert_date,
+    a.site_id,
+    a.cust_id,
+    sum(wit_withdrawal_dol_amt) monto_rtro
+  from `meli-bi-data.SBOX_PF_MKT.ad_grupo_control` a
+  left join `meli-bi-data.WHOWNER.BT_MP_WITHDRAWALS` b
+    on a.cust_id = b.cus_cust_id
+  where 1=1
+    and cast(b.wit_created_datetime as date) >= a.insert_date - 30
+  group by 1,2,3
+  ),
+
+  aux10 as
+  (
+  select distinct
+    a.insert_date,
+    a.site_id,
+    a.cust_id,
+    trunc(sum(cast(b.pay_payout_amount as numeric)/cast(c.cco_tc_value as numeric)),2) monto_payout
+  from `meli-bi-data.SBOX_PF_MKT.ad_grupo_control` a
+  left join `meli-bi-data.WHOWNER.BT_PAY_PAYOUT` b
+    on a.cust_id = b.cus_customer_id
+  left join `meli-bi-data.WHOWNER.LK_CURRENCY_CONVERTION` c
+    on cast(b.pay_payout_date_created_dttm as date) = c.tim_day
+    and b.sit_site_id = c.sit_site_id
+  where 1=1
+    and cast(b.pay_payout_date_created_dttm as date) >= a.insert_date - 30
+  group by 1,2,3
+  ),
+  
+  aux11 as
+  (
+  select distinct
+    cast(c.date_created as date) data_fchmto_caso,
+    a.site_id,
+    a.cust_id,
+    b.gca_id case_id,
+    b.gca_subtype subtype,
+    b.gca_second_subtype sec_subtype,
+    b.gca_comment_cases comentario
+  from `meli-bi-data.SBOX_PF_MKT.ad_grupo_control` a
+  left join `meli-bi-data.WHOWNER.BT_GENERAL_CASES_MANUALREW_EXP` b
+    on a.cust_id = cast(b.gca_cust_id as int)
+  left join `meli-bi-data.WHOWNER.BT_ACTION_MR` c
+    on b.gca_id = c.case_id
+  where 1=1
+    and b.gca_subtype = 'fraud_seller_user_bof'
+    and cast(c.date_created as date) = a.insert_date
+    and c.action_type = 'close_case'
+  ),
+
+  aux12 as
+  (
+  select distinct
+    a.insert_date,
+    a.site_id,
+    a.cust_id,
+    first_value (b.cus_verif_id) over (partition by b.cus_cust_id order by b.changed_dt desc) ev_atual,
+    b.cus_comments ev_coment
+  from `meli-bi-data.SBOX_PF_MKT.ad_grupo_control` a
+  left join `meli-bi-data.WHOWNER.BT_CUST_VERIFICATIONS` b
+    on a.cust_id = b.cus_cust_id
+  qualify 1 = row_number() over (partition by b.cus_cust_id order by b.cus_verif_id desc)
+  ),
+
+    aux13 as
+  (
+  select
+    a.insert_date,
+    a.site_id,
+    a.cust_id,
+    b.reason_id,
+    b.creation_date,
+    dense_rank() over (partition by b.cust_id order by b.creation_date, b.reason_id) as orden,
+    b.comments res_coment
+  from `meli-bi-data.SBOX_PF_MKT.ad_grupo_control` a
+  left join `meli-bi-data.WHOWNER.BT_MPR_CUST_RESTRICTION` b
+    on a.cust_id = b.cust_id
+  where 1=1
+    and b.status = 'P'
+  ),
+  
+  aux14 as
+  (
+  select
+    insert_date,
+    site_id,
+    cust_id,
+    res_coment,
+    concat(max(case when orden = 1 then reason_id else '-' end), 
+           max(case when orden = 2 then concat(' + ' , reason_id) else '' end),
+           max(case when orden = 3 then concat(' + ' , reason_id) else '' end),
+           max(case when orden = 4 then concat(' + ' , reason_id) else '' end),
+           max(case when orden = 5 then concat(' + ' , reason_id) else '' end),
+           max(case when orden = 6 then concat(' + ' , reason_id) else '' end)) res_atual
+    from aux13
+    group by 1,2,3,4
+  )
+
+
+-- seleção de dados
+  select
+    a.insert_date,
+    a.site_id,
+    a.cust_id,
+    a.qtdd_order,
+    a.qtdd_recla,
+    a.ratio_recla_order,
+    a.gmv,
+    a.gmv_recla,
+    a.ratio_gmv_gmvrecla,
+    a.co,
+    a.deuda,
+    a.ratio_co_gmv,
+    a.ratio_deuda_gmv,
+    a.has_mia,
+    b.is_churning,
+    coalesce(c.saldo_total,0) saldo_total,
+    coalesce(c.saldo_recla,0) saldo_recla,
+    coalesce(c.saldo_tp,0) saldo_tp,
+    coalesce(c.perc_recla,0) perc_recla,
+    coalesce(c.perc_tp,0) perc_tp,
+    d.pending,
+    d.shipped,
+    d.delivered,
+    d.cancelled,
+    coalesce(e1.monto_adto,0) adto_1d,
+    coalesce(e2.monto_rtro,0) rtro_1d,
+    coalesce(f1.monto_payout,0) payout_1d,
+    coalesce(f2.monto_adto,0) adto_30d,
+    coalesce(g1.monto_rtro,0) rtro_30d,
+    coalesce(g2.monto_payout,0) payo_30d,
+    h.data_fchmto_caso,
+    h.case_id,
+    h.subtype,
+    h.sec_subtype,
+    (case when i.ev_atual is null then 'DM' else i.ev_atual end) ev_atual,
+    i.ev_coment,
+    (case when k.res_atual is null then '-' else k.res_atual end) res_atual,
+    (case when k.res_coment is null then '-' else k.res_coment end) res_coment
+  from aux0 a
+  left join aux1 a1
+    on a.cust_id = a1.cust_id
+  left join aux2 b
+    on a.cust_id = b.cust_id
+  left join aux3 c
+    on a.cust_id = c.cust_id
+  left join aux4 d
+    on a.cust_id = d.cust_id
+  left join aux5 e1
+    on a.cust_id = e1.cust_id
+  left join aux6 e2
+    on a.cust_id = e2.cust_id
+  left join aux7 f1
+    on a.cust_id = f1.cust_id
+  left join aux8 f2
+    on a.cust_id = f2.cust_id
+  left join aux9 g1
+    on a.cust_id = g1.cust_id
+  left join aux10 g2
+    on a.cust_id = g2.cust_id
+  left join aux11 h
+    on a.cust_id = h.cust_id
+  left join aux12 i
+    on a.cust_id = i.cust_id
+  left join aux13 j
+    on a.cust_id = j.cust_id
+  left join aux14 k
+    on a.cust_id = k.cust_id;
+
+
+
+-- dados para seguir
+drop table if exists `meli-bi-data.SBOX_PF_MKT.ad_alertas_diarios`;
+CREATE TABLE `meli-bi-data.SBOX_PF_MKT.ad_alertas_diarios`
+OPTIONS(
+  expiration_timestamp = TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL 1 DAY)
+) AS
+with
+  aux20 as
+  ( 
+  select
+    a.insert_date,
+    a.site_id,
+    a.cust_id,
+    count(b.ord_order_id) as qtdd_order,
+    sum(b.has_claim) as qtdd_recla,
+    count(b.has_claim)/sum(b.ord_order_id) as ratio_recla_order,
+    sum(b.gmv_usd) as gmv,
+    sum(b.gmv_usd * b.has_claim) as gmv_recla,
+    sum(b.gmv_usd * b.has_claim)/nullif(sum(b.gmv_usd),0) as ratio_gmv_gmvrecla,
+    sum(case when b.tipo_fraude = 'fraud_sel' then b.bpp_debt else 0 end) deuda,
+    sum(case when b.tipo_fraude = 'fraud_sel' then b.bpp_cashout_final + b.bpp_cashout_etiqueta else 0 end) as co,
+    sum(case when b.tipo_fraude = 'fraud_sel' then b.bpp_debt else 0 end)/nullif(sum(b.gmv_usd),0) as ratio_deuda_gmv,
+    sum(case when b.tipo_fraude = 'fraud_sel' then b.bpp_cashout_final + b.bpp_cashout_etiqueta else 0 end)/nullif(sum(b.gmv_usd),0) as ratio_co_gmv,
+    b.has_mia
+  from `meli-bi-data.SBOX_PF_MKT.ad_grupo_control` a
+  left join `meli-bi-data.SBOX_PF_MKT.fraud_main_mirror_metricas` b
+    on a.cust_id = b.cus_cust_id_sel
+  where b.tim_day_winning_date = a.insert_date
+  group by 1,2,3,14
+  ),
+
+  aux21 as
+  (
+  select
+    a.insert_date,
+    a.site_id,
+    a.cust_id,
+    count(b.ord_order_id) as qtdd_order_7d,
+    sum(b.has_claim) as qtdd_recla_7d,
+    count(b.has_claim)/sum(b.ord_order_id) as ratio_recla_order_7d,
+    sum(b.gmv_usd) as gmv_7d,
+    sum(b.gmv_usd * b.has_claim) as gmv_recla_7d,
+    sum(b.gmv_usd * b.has_claim)/nullif(sum(b.gmv_usd),0) as ratio_gmv_gmvrecla_7d,
+    sum(case when b.tipo_fraude = 'fraud_sel' then b.bpp_debt else 0 end) deuda_7d,
+    sum(case when b.tipo_fraude = 'fraud_sel' then b.bpp_cashout_final + b.bpp_cashout_etiqueta else 0 end) as co_7d,
+    sum(case when b.tipo_fraude = 'fraud_sel' then b.bpp_debt else 0 end)/nullif(sum(b.gmv_usd),0) as ratio_deuda_gmv_7d,
+    sum(case when b.tipo_fraude = 'fraud_sel' then b.bpp_cashout_final + b.bpp_cashout_etiqueta else 0 end)/nullif(sum(b.gmv_usd),0) as ratio_co_gmv_7d
+  from `meli-bi-data.SBOX_PF_MKT.ad_grupo_control` a
+  left join `meli-bi-data.SBOX_PF_MKT.fraud_main_mirror_metricas` b
+    on a.cust_id = b.cus_cust_id_sel
+  where b.tim_day_winning_date >= a.insert_date - 7
+  group by 1,2,3
+  ),
+
+  aux22 as
+  (
+  select distinct
+    a.insert_date,
+    a.site_id,
+    a.cust_id,
+    (case when (case when tim_day_winning_date between current_date - 30 and current_date then gmv_usd else 0 end)/nullif(case when tim_day_winning_date between current_date - 60 and current_date - 31 then gmv_usd else 0 end,0) < 0.2
+    and (case when tim_day_winning_date between current_date - 31 and current_date - 60 then gmv_usd else 0 end)/nullif(case when tim_day_winning_date between current_date - 90 and current_date - 61 then gmv_usd else 0 end,0) < 0.2
+     then 1 else 0 end) is_churning
+  from `meli-bi-data.SBOX_PF_MKT.ad_grupo_control` a
+  left join `meli-bi-data.SBOX_PF_MKT.fraud_main_mirror_metricas` b
+    on a.cust_id = b.cus_cust_id_sel
+  ),
+
+  aux23 as
+  (
+  select
+    a.insert_date,
+    a.site_id,
+    a.cust_id,
+    b.total_amount as saldo_total,
+    b.dispute_amount as saldo_recla,
+    b.unav_for_period_amount as saldo_tp,
+    b.dispute_amount / b.total_amount as perc_recla,
+    b.unav_for_period_amount / b.total_amount as perc_tp
+  from `meli-bi-data.SBOX_PF_MKT.ad_grupo_control` a
+  left join `meli-bi-data.WHOWNER.BT_MP_SALDOS_SNAPSHOT_DAILY` b
+    on cast(a.cust_id as int) = cast(b.cus_cust_id as int)
+  where b.tim_day = a.insert_date
+  ),
+
+  aux24 as
+  (
+  select
+    a.insert_date,
+    a.site_id,
+    a.cust_id,
+    trunc(coalesce(cast(sum(case when b.shp_status_id='pending' then 1 else 0 end) as numeric)/cast(count(b.shp_status_id) as numeric),0),2) pending,
+    trunc(coalesce(cast(sum(case when b.shp_status_id='shipped' then 1 else 0 end) as numeric)/cast(count(b.shp_status_id) as numeric),0),2) shipped,
+    trunc(coalesce(cast(sum(case when b.shp_status_id='delivered' then 1 else 0 end) as numeric)/cast(count(b.shp_status_id) as numeric),0),2) delivered,
+    trunc(coalesce(cast(sum(case when b.shp_status_id='cancelled' then 1 else 0 end) as numeric)/cast(count(b.shp_status_id) as numeric),0),2) cancelled
+  from `meli-bi-data.SBOX_PF_MKT.ad_grupo_control` a
+  left join `meli-bi-data.WHOWNER.BT_SHP_SHIPMENTS` b
+    on a.cust_id = b.shp_sender_id
+  where 1=1
+    and b.shp_type = 'forward'
+    and cast(b.shp_datetime_created_id as date) = a.insert_date
+  group by 1,2,3
+  ),
+
+  aux25 as
+  (
+  select
+    a.insert_date,
+    a.site_id,
+    a.cust_id,
+    trunc(coalesce(sum(c.amount_inusd),0),2) monto_adto
+  from `meli-bi-data.SBOX_PF_MKT.ad_grupo_control` a
+  left join `WHOWNER.BT_MP_MIA` b
+    on a.cust_id = b.cus_cust_id
+  left join `WHOWNER.BT_MP_MIA_OPERATION` c
+    on b.money_advanced_id = c.money_advance_id
+  where cast(b.creation_date as date) = a.insert_date
+  group by 1,2,3
+  ),
+
+  aux26 as
+  (
+  select
+    a.insert_date,
+    a.site_id,
+    a.cust_id,
+    trunc(sum(wit_withdrawal_dol_amt),2) monto_rtro
+  from `meli-bi-data.SBOX_PF_MKT.ad_grupo_control` a
+  left join `meli-bi-data.WHOWNER.BT_MP_WITHDRAWALS` b
+    on a.cust_id = b.cus_cust_id
+  where cast(b.wit_created_datetime as date) = a.insert_date
+  group by 1,2,3
+  ),
+
+  aux27 as
+  (
+  select
+    a.insert_date,
+    a.site_id,
+    a.cust_id,
+    trunc(ifnull(sum(cast(b.pay_payout_amount as numeric)/cast(c.cco_tc_value as numeric)),0),2) monto_payout
+  from `meli-bi-data.SBOX_PF_MKT.ad_grupo_control` a
+  left join `meli-bi-data.WHOWNER.BT_PAY_PAYOUT` b
+    on a.cust_id = b.cus_customer_id
+  left join `meli-bi-data.WHOWNER.LK_CURRENCY_CONVERTION` c
+    on cast(b.pay_payout_date_created_dttm as date) = c.tim_day
+    and b.sit_site_id = c.sit_site_id
+  where cast(b.pay_payout_date_created_dttm as date) = a.insert_date
+  group by 1,2,3
+  ),
+
+  aux28 as
+  (
+  select
+    a.insert_date,
+    a.site_id,
+    a.cust_id,
+    coalesce(sum(c.amount_inusd),0) monto_adto
+  from `meli-bi-data.SBOX_PF_MKT.ad_grupo_control` a
+  left join `WHOWNER.BT_MP_MIA` b
+    on a.cust_id = b.cus_cust_id
+  left join `WHOWNER.BT_MP_MIA_OPERATION` c
+    on b.money_advanced_id = c.money_advance_id
+  where 1=1
+    and cast(b.creation_date as date) >= a.insert_date - 30
+  group by 1,2,3
+  ),
+
+  aux29 as
+  (
+  select
+    a.insert_date,
+    a.site_id,
+    a.cust_id,
+    sum(wit_withdrawal_dol_amt) monto_rtro
+  from `meli-bi-data.SBOX_PF_MKT.ad_grupo_control` a
+  left join `meli-bi-data.WHOWNER.BT_MP_WITHDRAWALS` b
+    on a.cust_id = b.cus_cust_id
+  where 1=1
+    and cast(b.wit_created_datetime as date) >= a.insert_date - 30
+  group by 1,2,3
+  ),
+
+  aux30 as
+  (
+  select distinct
+    a.insert_date,
+    a.site_id,
+    a.cust_id,
+    trunc(sum(cast(b.pay_payout_amount as numeric)/cast(c.cco_tc_value as numeric)),2) monto_payout
+  from `meli-bi-data.SBOX_PF_MKT.ad_grupo_control` a
+  left join `meli-bi-data.WHOWNER.BT_PAY_PAYOUT` b
+    on a.cust_id = b.cus_customer_id
+  left join `meli-bi-data.WHOWNER.LK_CURRENCY_CONVERTION` c
+    on cast(b.pay_payout_date_created_dttm as date) = c.tim_day
+    and b.sit_site_id = c.sit_site_id
+  where 1=1
+    and cast(b.pay_payout_date_created_dttm as date) >= a.insert_date - 30
+  group by 1,2,3
+  ),
+  
+  aux31 as
+  (
+  select distinct
+    cast(c.date_created as date) data_fchmto_caso,
+    a.site_id,
+    a.cust_id,
+    b.gca_id case_id,
+    b.gca_subtype subtype,
+    b.gca_second_subtype sec_subtype,
+    b.gca_comment_cases comentario
+  from `meli-bi-data.SBOX_PF_MKT.ad_grupo_control` a
+  left join `meli-bi-data.WHOWNER.BT_GENERAL_CASES_MANUALREW_EXP` b
+    on a.cust_id = cast(b.gca_cust_id as int)
+  left join `meli-bi-data.WHOWNER.BT_ACTION_MR` c
+    on b.gca_id = c.case_id
+  where 1=1
+    and b.gca_subtype = 'fraud_seller_user_bof'
+    and cast(c.date_created as date) = a.insert_date
+    and c.action_type = 'close_case'
+  ),
+
+  aux32 as
+  (
+  select distinct
+    a.insert_date,
+    a.site_id,
+    a.cust_id,
+    first_value (b.cus_verif_id) over (partition by b.cus_cust_id order by b.changed_dt desc) ev_atual,
+    b.cus_comments ev_coment
+  from `meli-bi-data.SBOX_PF_MKT.ad_grupo_control` a
+  left join `meli-bi-data.WHOWNER.BT_CUST_VERIFICATIONS` b
+    on a.cust_id = b.cus_cust_id
+  qualify 1 = row_number() over (partition by b.cus_cust_id order by b.cus_verif_id desc)
+  ),
+
+  aux33 as
+  (
+  select
+    a.insert_date,
+    a.site_id,
+    a.cust_id,
+    b.reason_id,
+    b.creation_date,
+    dense_rank() over (partition by b.cust_id order by b.creation_date, b.reason_id) as orden,
+    b.comments res_coment
+  from `meli-bi-data.SBOX_PF_MKT.ad_grupo_control` a
+  left join `meli-bi-data.WHOWNER.BT_MPR_CUST_RESTRICTION` b
+    on a.cust_id = b.cust_id
+  where 1=1
+    and b.status = 'P'
+  ),
+  
+  aux34 as
+  (
+  select
+    insert_date,
+    site_id,
+    cust_id,
+    res_coment,
+    concat(max(case when orden = 1 then reason_id else '-' end), 
+           max(case when orden = 2 then concat(' + ' , reason_id) else '' end),
+           max(case when orden = 3 then concat(' + ' , reason_id) else '' end),
+           max(case when orden = 4 then concat(' + ' , reason_id) else '' end),
+           max(case when orden = 5 then concat(' + ' , reason_id) else '' end),
+           max(case when orden = 6 then concat(' + ' , reason_id) else '' end)) res_atual
+    from aux13
+    group by 1,2,3,4
+  )
+
+
+-- seleção de dados
+  select
+    a.insert_date,
+    a.site_id,
+    a.cust_id,
+    a.qtdd_order,
+    a.qtdd_recla,
+    a.ratio_recla_order,
+    a.gmv,
+    a.gmv_recla,
+    a.ratio_gmv_gmvrecla,
+    a.co,
+    a.deuda,
+    a.ratio_co_gmv,
+    a.ratio_deuda_gmv,
+    a.has_mia,
+    b.is_churning,
+    coalesce(c.saldo_total,0) saldo_total,
+    coalesce(c.saldo_recla,0) saldo_recla,
+    coalesce(c.saldo_tp,0) saldo_tp,
+    coalesce(c.perc_recla,0) perc_recla,
+    coalesce(c.perc_tp,0) perc_tp,
+    d.pending,
+    d.shipped,
+    d.delivered,
+    d.cancelled,
+    coalesce(e1.monto_adto,0) adto_1d,
+    coalesce(e2.monto_rtro,0) rtro_1d,
+    coalesce(f1.monto_payout,0) payout_1d,
+    coalesce(f2.monto_adto,0) adto_30d,
+    coalesce(g1.monto_rtro,0) rtro_30d,
+    coalesce(g2.monto_payout,0) payo_30d,
+    h.data_fchmto_caso,
+    h.case_id,
+    h.subtype,
+    h.sec_subtype,
+    (case when i.ev_atual is null then 'DM' else i.ev_atual end) ev_atual,
+    i.ev_coment,
+    (case when k.res_atual is null then '-' else k.res_atual end) res_atual,
+    (case when k.res_coment is null then '-' else k.res_coment end) res_coment
+  from aux20 a
+  left join aux21 a1
+    on a.cust_id = a1.cust_id
+  left join aux22 b
+    on a.cust_id = b.cust_id
+  left join aux23 c
+    on a.cust_id = c.cust_id
+  left join aux24 d
+    on a.cust_id = d.cust_id
+  left join aux25 e1
+    on a.cust_id = e1.cust_id
+  left join aux26 e2
+    on a.cust_id = e2.cust_id
+  left join aux27 f1
+    on a.cust_id = f1.cust_id
+  left join aux28 f2
+    on a.cust_id = f2.cust_id
+  left join aux29 g1
+    on a.cust_id = g1.cust_id
+  left join aux30 g2
+    on a.cust_id = g2.cust_id
+  left join aux31 h
+    on a.cust_id = h.cust_id
+  left join aux32 i
+    on a.cust_id = i.cust_id
+  left join aux33 j
+    on a.cust_id = j.cust_id
+  left join aux34 k
+    on a.cust_id = k.cust_id
+  where 1=1
+    and ((a.has_mia = 1 or b.is_churning = 1) and (a.gmv_recla > a.gmv or c.saldo_recla > c.saldo_total or a.co + a.deuda > 0))
+-- lleva adto hoy & gmv_recla > gmv
+-- lleva adto hoy & saldo_recla > saldo_tot
+-- lleva adto hoy & co > 0
+-- lleva adto hoy & deuda > 0
+-- en proceso de churn & gmv_recla > gmv
+-- en proceso de churn & saldo_recla > saldo_tot
+-- en proceso de churn & co > 0
+-- en proceso de churn & deuda > 0
+    or (a.has_mia = 1 and d.shipped > 0.5 and (c.saldo_recla > 0 or a.gmv_recla > 0))
+-- lleva adto hoy & shipped > 50% & saldo_recla > 0
+-- lleva adto hoy & shipped > 50% & gmv_recla > 0
+    or a.co + a.deuda > 2000
+    or a.ratio_co_gmv + a.ratio_deuda_gmv > 0.07
+    or a1.co_7d + a1.deuda_7d > 15000
+    or a1.ratio_co_gmv_7d + a1.ratio_deuda_gmv_7d > 0.5;
+
+
+
+
+
+-------------------------- EXECUÇÃO DA REGRA --------------------------
+
+-- tabla de scoring para subir las infos GENERALES
+drop table if exists `meli-bi-data.SBOX_PF_MKT.tabla_general_ad`;
+CREATE TABLE `meli-bi-data.SBOX_PF_MKT.tabla_general_ad`
+  (
+  insert_date date,
+  site_id string(80),
+  cust_id int,
+  qtdd_order int,
+  qtdd_recla int,
+  ratio_recla_order numeric,
+  gmv numeric,
+  gmv_recla numeric,
+  ratio_gmv_gmvrecla numeric,
+  co numeric,
+  deuda numeric,
+  ratio_co_gmv numeric,
+  ratio_deuda_gmv numeric,
+  has_mia int,
+  is_churning int,
+  saldo_total numeric,
+  saldo_recla numeric,
+  saldo_tp numeric,
+  perc_recla numeric,
+  perc_tp numeric,
+  pending numeric,
+  shipped numeric,
+  delivered numeric,
+  cancelled numeric,
+  adto_1d numeric,
+  adto_30d numeric,
+  rtro_1d numeric,
+  rtro_30d numeric,
+  payo_1d numeric,
+  payo_30d numeric,
+  data_fchmto_caso datetime,
+  case_id string(80),
+  subtype string(80),
+  sec_subtype string(80),
+  ev_atual string(80),
+  ev_coment string(400),
+  res_atual string(160),
+  res_coment string(400)
+  );
+
+
+-- tabla de scoring para subir las infos de ALERTAS
+drop table if exists `meli-bi-data.SBOX_PF_MKT.tabla_alertas_ad`;
+CREATE TABLE `meli-bi-data.SBOX_PF_MKT.tabla_alertas_ad`
+  (
+  insert_date date,
+  site_id string(80),
+  cust_id int,
+  qtdd_order int,
+  qtdd_recla int,
+  ratio_recla_order numeric,
+  gmv numeric,
+  gmv_recla numeric,
+  ratio_gmv_gmvrecla numeric,
+  co numeric,
+  deuda numeric,
+  ratio_co_gmv numeric,
+  ratio_deuda_gmv numeric,
+  has_mia int,
+  is_churning int,
+  saldo_total numeric,
+  saldo_recla numeric,
+  saldo_tp numeric,
+  perc_recla numeric,
+  perc_tp numeric,
+  pending numeric,
+  shipped numeric,
+  delivered numeric,
+  cancelled numeric,
+  adto_1d numeric,
+  adto_30d numeric,
+  rtro_1d numeric,
+  rtro_30d numeric,
+  payo_1d numeric,
+  payo_30d numeric,
+  data_fchmto_caso datetime,
+  case_id string(80),
+  subtype string(80),
+  sec_subtype string(80),
+  ev_atual string(80),
+  ev_coment string(400),
+  res_atual string(160),
+  res_coment string(400)
+  );
+
+
+
+-- insertar dados na tabela general
+insert into `meli-bi-data.SBOX_PF_MKT.tabla_general_ad`
+ (insert_date, site_id, cust_id, qtdd_order, qtdd_recla, ratio_recla_order, gmv, gmv_recla, ratio_gmv_gmvrecla, co, deuda, ratio_co_gmv, ratio_deuda_gmv,
+  has_mia, is_churning, saldo_total, saldo_recla, saldo_tp, perc_recla, perc_tp, pending, shipped, delivered, cancelled, adto_1d, adto_30d,
+  rtro_1d, rtro_30d, payo_1d, payo_30d, data_fchmto_caso, case_id, subtype, sec_subtype, ev_atual, ev_coment, res_atual, res_coment)
+  select *
+  from `meli-bi-data.SBOX_PF_MKT.ad_tabla_final_diaria`;
+
+
+-- insertar dados na tabela de alertas
+insert into `meli-bi-data.SBOX_PF_MKT.tabla_alertas_ad`
+ (insert_date, site_id, cust_id, qtdd_order, qtdd_recla, ratio_recla_order, gmv, gmv_recla, ratio_gmv_gmvrecla, co, deuda, ratio_co_gmv, ratio_deuda_gmv,
+  has_mia, is_churning, saldo_total, saldo_recla, saldo_tp, perc_recla, perc_tp, pending, shipped, delivered, cancelled, adto_1d, adto_30d,
+  rtro_1d, rtro_30d, payo_1d, payo_30d, data_fchmto_caso, case_id, subtype, sec_subtype, ev_atual, ev_coment, res_atual, res_coment)
+  select *
+  from `meli-bi-data.SBOX_PF_MKT.ad_tabla_final_diaria`;
+
+
+
+--------------------- DDL DOS DADOS ---------------------
+
+delete from `meli-bi-data.SBOX_PF_MKT.ad_datos_diarios` where cust_id > 0;
+delete from `meli-bi-data.SBOX_PF_MKT.ad_alertas_diarios` where cust_id > 0;
+
+select * from `meli-bi-data.SBOX_PF_MKT.ad_datos_diarios`;
+select * from `meli-bi-data.SBOX_PF_MKT.ad_alertas_diarios`;
+
+
+
+
