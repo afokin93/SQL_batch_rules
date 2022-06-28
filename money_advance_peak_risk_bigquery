@@ -1,0 +1,145 @@
+
+-- adelantos 1d
+drop table if exists `meli-bi-data.SBOX_PF_MKT.adelantos_1d_v3`;
+CREATE TABLE `meli-bi-data.SBOX_PF_MKT.adelantos_1d_v3`
+OPTIONS(
+  expiration_timestamp = TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL 1 DAY)
+) AS
+  select
+    b.cus_cust_id cust_id,
+    round(sum(a.amount_inusd),2) monto_1d,
+    count(distinct b.money_advanced_id) qtdd_1d,
+    round(cast(sum(a.amount_inusd) as numeric)/cast(count(distinct b.money_advanced_id) as numeric),2) ticket_1d
+  from WHOWNER.BT_MP_MIA_OPERATION a
+  left join WHOWNER.BT_MP_MIA b
+    on a.money_advance_id = b.money_advanced_id
+  where cast(b.creation_date as date) = current_date - 1
+  group by 1
+  order by 1;
+
+
+-- adelantos 14d
+drop table if exists `meli-bi-data.SBOX_PF_MKT.adelantos_14d_v3`;
+CREATE TABLE `meli-bi-data.SBOX_PF_MKT.adelantos_14d_v3`
+OPTIONS(
+  expiration_timestamp = TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL 1 DAY)
+) AS
+  select
+    b.cus_cust_id cust_id,
+    round(sum(a.amount_inusd),2) monto_14d,
+    round(sum(a.amount_inusd),2)/14 avg_monto_14d,
+    count(distinct b.money_advanced_id) qtdd_14d,
+    count(distinct b.money_advanced_id)/14 avg_qtdd_14d,
+    round(cast(sum(a.amount_inusd) as numeric)/cast(count(distinct b.money_advanced_id) as numeric),2) ticket_14d
+  from WHOWNER.BT_MP_MIA_OPERATION a
+  left join WHOWNER.BT_MP_MIA b
+    on a.money_advance_id = b.money_advanced_id
+  where cast(b.creation_date as date) between current_date - 16 and current_date - 2
+  group by 1
+  order by 1;
+
+
+-- nueva regla de alarma v3
+drop table if exists `meli-bi-data.SBOX_PF_MKT.alarma_adelantos_v3`;
+CREATE TABLE `meli-bi-data.SBOX_PF_MKT.alarma_adelantos_v3`
+OPTIONS(
+  expiration_timestamp = TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL 1 DAY)
+) AS
+  select
+    a.cust_id,
+    a.monto_1d,
+    a.qtdd_1d,
+    a.ticket_1d,
+    b.monto_14d,
+    b.qtdd_14d,
+    b.ticket_14d,
+    round(a.monto_1d/nullif(b.avg_monto_14d,0),2) ratio_monto,
+    round(a.qtdd_1d/nullif(b.avg_qtdd_14d,0),2) ratio_qtdd,
+    round(a.ticket_1d/nullif(b.ticket_14d,0),2) ratio_ticket
+  from meli-bi-data.SBOX_PF_MKT.adelantos_1d_v3 a
+  left join meli-bi-data.SBOX_PF_MKT.adelantos_14d_v3 b
+    on a.cust_id = b.cust_id
+  where a.monto_1d >= 10000
+    and (round(a.monto_1d/nullif(b.avg_monto_14d,0),2) >= 10
+          or round(a.qtdd_1d/nullif(b.avg_qtdd_14d,0),2) > 5
+          or round(a.ticket_1d/nullif(b.ticket_14d,0),2) > 2)
+  group by 1,2,3,4,5,6,7,8,9,10;
+
+
+-- electronics > 50%
+drop table if exists `meli-bi-data.SBOX_PF_MKT.adelantos_mucho_electronics_v3`;
+CREATE TABLE `meli-bi-data.SBOX_PF_MKT.adelantos_mucho_electronics_v3`
+OPTIONS (
+  expiration_timestamp = TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL 1 DAY)
+) AS
+  select
+    a.cust_id,
+    b.sit_site_id site_id,
+    sum(case when b.tim_day_winning_date >= current_date - 30 then b.gmv_usd else 0 end) gmv_30d,
+    sum(case when b.tim_day_winning_date >= current_date - 30 and b.vertical in ('consumer_electronics','CE') then b.gmv_usd else 0 end)/sum(case when b.tim_day_winning_date >= current_date - 30 then gmv_usd else 0 end) parcela_ce
+  from meli-bi-data.SBOX_PF_MKT.alarma_adelantos_v3 a
+  left join meli-bi-data.SBOX_PF_MKT.fraud_main_mirror_metricas b
+    on a.cust_id = b.cus_cust_id_sel
+  group by 1,2
+  having sum(case when b.tim_day_winning_date >= current_date - 30 then b.gmv_usd else 0 end) > 10000
+    and sum(case when b.tim_day_winning_date >= current_date - 30 and b.vertical in ('consumer_electronics','CE') then gmv_usd else 0 end)/sum(case when b.tim_day_winning_date >= current_date - 30 then gmv_usd else 0 end) > 0.5;
+
+
+
+
+-------------------------- EXECUÇÃO DA REGRA --------------------------
+
+-- tabla de scoring para subir las infos
+drop table if exists `meli-bi-data.SBOX_PF_MKT.tabla_alarma_adelantos_v3`;
+CREATE TABLE `meli-bi-data.SBOX_PF_MKT.tabla_alarma_adelantos_v3`
+  (
+  insert_date date,
+  site_id string(80),
+  cust_id numeric,
+  monto_1d numeric,
+  qtdd_1d int,
+  ticket_1d numeric,
+  monto_14d numeric,
+  qtdd_14d int,
+  ticket_14d numeric,
+  ratio_monto numeric,
+  ratio_qtdd float64,
+  ratio_ticket numeric,
+  parcela_ce numeric
+  );
+
+
+-- insertar dados na tabela
+insert into `meli-bi-data.SBOX_PF_MKT.tabla_alarma_adelantos_v3`
+ (insert_date, site_id, cust_id, monto_1d, qtdd_1d, ticket_1d, monto_14d, qtdd_14d, ticket_14d, ratio_monto, ratio_qtdd, ratio_ticket, parcela_ce)
+  select distinct
+    current_date,
+    b.site_id,
+    a.cust_id,
+    a.monto_1d,
+    a.qtdd_1d,
+    a.ticket_1d,
+    a.monto_14d,
+    a.qtdd_14d,
+    a.ticket_14d,
+    coalesce(a.ratio_monto,0) ratio_monto,
+    coalesce(a.ratio_qtdd,0) ratio_qtdd,
+    coalesce(a.ratio_ticket,0) ratio_ticket,
+    b.parcela_ce
+  from meli-bi-data.SBOX_PF_MKT.alarma_adelantos_v3 a
+  join meli-bi-data.SBOX_PF_MKT.adelantos_mucho_electronics_v3 b
+    on a.cust_id = b.cust_id;
+
+
+
+---------------------------- DDL DOS DADOS ----------------------------
+
+-- delete de dados
+delete from meli-bi-data.SBOX_PF_MKT.tabla_alarma_adelantos_v3 where cust_id > 0;
+
+-- seleção de dados
+select * from meli-bi-data.SBOX_PF_MKT.tabla_alarma_adelantos_v3 order by 1;
+
+
+
+
