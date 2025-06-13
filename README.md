@@ -17,4 +17,3 @@
 | Induced BOF by fakes | BOF                |
 | Micro BOF            | BOF                |
 | Money advance peak   | BOF                |
-
