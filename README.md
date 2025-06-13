@@ -9,10 +9,12 @@
 
 <br>
 
-#### Rules Above:
-- **BES shipments** --------→ BES  
-- **Electronics peak** -----→ BOF  
-- **High claim alert** ------→ FOS  
-- **Induced BOF by fakes** → BOF  
-- **Micro BOF** ------------→ BOF  
-- **Money advance peak** → BOF  
+| Rules above          | Assigned Profile   |
+|:---------------------|:-------------------|
+| BES shipments        | BES                |
+| Electronics peak     | BOF                |
+| High claim alert     | FOS                |
+| Induced BOF by fakes | BOF                |
+| Micro BOF            | BOF                |
+| Money advance peak   | BOF                |
+
